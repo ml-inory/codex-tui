@@ -138,9 +138,28 @@ class ChatLog(VerticalScroll):
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self._pending_stream: Static | None = None
+        self._pending_label: Static | None = None
         self._pending_text = ""
         self._messages: list[SessionMessage] = []
         self._window = DEFAULT_WINDOW
+        # One persistent container per rendered session. Switching sessions
+        # only toggles ``display``, so the layout is computed once per session
+        # instead of on every switch.
+        self._containers: dict[str, VerticalScroll] = {}
+        self._active_id: str | None = None
+        self._rendered_id: str | None = None
+        self._rendered_signature: tuple[int, str, int] | None = None
+
+    async def _ensure_active_container(self) -> VerticalScroll:
+        """Return the container for the current view, mounting it on demand."""
+        if self._active_id is not None and self._active_id in self._containers:
+            return self._containers[self._active_id]
+        container = VerticalScroll(id="session-new")
+        await self.mount(container)
+        container._window = DEFAULT_WINDOW
+        self._containers[""] = container
+        self._active_id = ""
+        return container
 
     async def render_session(self, session: Session) -> None:
         self._messages = [
@@ -148,11 +167,39 @@ class ChatLog(VerticalScroll):
             for message in session.messages
             if not (message.role == "user" and is_injected_message(message.content))
         ]
-        self._window = DEFAULT_WINDOW
-        await self._render_window()
+        old_id = self._rendered_id
+        container = self._containers.get(session.id)
+        if container is None:
+            container = VerticalScroll(id=f"session-{session.id}")
+            await self.mount(container)
+            self._containers[session.id] = container
+            container._window = DEFAULT_WINDOW
+        self._active_id = session.id
+        for cid, cached in self._containers.items():
+            if cid != session.id:
+                cached.display = False
+        container.display = True
+        self._window = container._window
+        signature = self._message_signature()
+        container_signature = getattr(container, "_signature", None)
+        if container_signature != signature or not container.children:
+            await self._render_window()
+        container._signature = signature
+        self._rendered_signature = signature
+        self._rendered_id = session.id
+        container.scroll_end(animate=False)
+
+    def _message_signature(self) -> tuple[int, str, int]:
+        """Cheap fingerprint of the rendered message window."""
+        if not self._messages:
+            return (0, "", 0)
+        window = self._messages[-self._window :]
+        last = window[-1]
+        return (len(window), last.item_id or "", len(last.content))
 
     async def _render_window(self) -> None:
         await self.clear_chat()
+        container = await self._ensure_active_container()
         start = max(0, len(self._messages) - self._window)
         rows: list[Widget] = []
         if start > 0:
@@ -164,24 +211,25 @@ class ChatLog(VerticalScroll):
                 )
             )
         for message in self._messages[start:]:
-            rows.append(self._build_row(message.role, message.content))
+            rows.extend(self._build_rows(message.role, message.content))
         if rows:
-            await self.mount(*rows)
-            self.refresh(layout=True)
-        self.scroll_end(animate=False)
+            await container.mount(*rows)
+            container.refresh(layout=True)
+        container.scroll_end(animate=False)
+        container._window = self._window
 
     async def load_earlier(self) -> bool:
         """Expand the visible window upward; returns True if more was loaded."""
         if len(self._messages) <= self._window:
             return False
         old_start = max(0, len(self._messages) - self._window)
-        self._window += DEFAULT_WINDOW
+        self._window = min(len(self._messages), self._window + DEFAULT_WINDOW)
         await self._render_window()
         new_start = max(0, len(self._messages) - self._window)
         offset = old_start - new_start
         widgets = [
             child
-            for child in self.children
+            for child in (await self._ensure_active_container()).children
             if not (isinstance(child, Static) and child.id == "earlier-hint")
         ]
         if 0 <= offset < len(widgets):
@@ -191,21 +239,46 @@ class ChatLog(VerticalScroll):
         return True
 
     async def clear_chat(self) -> None:
-        await self.remove_children(self.children)
+        container = await self._ensure_active_container()
+        await container.remove_children(container.children)
+        container._signature = None
         self._pending_stream = None
+        self._pending_label = None
         self._pending_text = ""
+        self._rendered_id = None
+        self._rendered_signature = None
 
-    def _build_row(self, role: str, content: str) -> Widget:
+    def visible_widgets(self) -> list[Widget]:
+        """Rows of the currently visible session container (test/selection)."""
+        container = self._containers.get(self._active_id or "")
+        if container is None:
+            return []
+        return list(container.children)
+
+    def _build_rows(self, role: str, content: str) -> list[Widget]:
         if role == "user":
-            # Flat widgets are required: nested containers inside a
-            # VerticalScroll collapse to one line in Textual 8.2.8 once the
-            # content exceeds the viewport (long conversations).
-            return Static(f"[b]You[/b]\n{escape(content)}", classes="bubble user")
-        return Markdown(f"**Codex**\n\n{content}", classes="md")
+            # Codex CLI style: cyan "You" label, plain text.
+            return [
+                Static("You", classes="user-label"),
+                Static(escape(content), classes="user-body"),
+            ]
+        # Codex CLI style: magenta "Codex" label above the markdown body.
+        return [
+            Static("Codex", classes="assistant-label"),
+            Markdown(content, classes="assistant-body"),
+        ]
 
     async def add_message(self, role: str, content: str) -> None:
-        await self.mount(self._build_row(role, content))
-        self.scroll_end(animate=False)
+        container = await self._ensure_active_container()
+        # A new turn starts from the transcript again: drop any previously
+        # rendered rows so the new message is not appended to a stale view.
+        if container.children:
+            await container.remove_children(container.children)
+            self._pending_stream = None
+            self._pending_label = None
+            self._pending_text = ""
+        await container.mount(*self._build_rows(role, content))
+        container.scroll_end(animate=False)
 
     async def add_user_message(self, content: str) -> None:
         await self.add_message("user", content)
@@ -217,29 +290,35 @@ class ChatLog(VerticalScroll):
         as markup) and only parse Markdown once at the end, so token-level
         updates stay cheap.
         """
-        stream = Static(Text(""), classes="bubble streaming")
-        await self.mount(stream)
+        container = await self._ensure_active_container()
+        label = Static("Codex", classes="assistant-label")
+        await container.mount(label)
+        self._pending_label = label
+        stream = Static(Text(""), classes="assistant-body streaming")
+        await container.mount(stream)
         self._pending_stream = stream
         self._pending_text = ""
-        self.scroll_end(animate=False)
+        container.scroll_end(animate=False)
 
     async def append_assistant_delta(self, delta: str) -> None:
         """Append a streamed chunk to the open assistant message."""
         if self._pending_stream is None:
             await self.begin_assistant_message()
         assert self._pending_stream is not None
+        container = await self._ensure_active_container()
         self._pending_text += delta
         self._pending_stream.update(Text(self._pending_text))
-        self.scroll_end(animate=False)
+        container.scroll_end(animate=False)
 
     async def update_assistant_message(self, text: str) -> None:
         """Set the whole assistant body at once (non-streaming fallback)."""
         if self._pending_stream is None:
             await self.begin_assistant_message()
         assert self._pending_stream is not None
+        container = await self._ensure_active_container()
         self._pending_text = text
         self._pending_stream.update(Text(text))
-        self.scroll_end(animate=False)
+        container.scroll_end(animate=False)
 
     async def finish_assistant_message(self) -> None:
         """Render the finished assistant message as Markdown."""
@@ -247,12 +326,12 @@ class ChatLog(VerticalScroll):
             body = self._pending_text
             await self._pending_stream.remove()
             self._pending_stream = None
+            self._pending_label = None
             self._pending_text = ""
-            markdown = Markdown(
-                f"**Codex**\n\n{body}" if body else "**Codex**", classes="md"
-            )
-            await self.mount(markdown)
-            self.scroll_end(animate=False)
+            markdown = Markdown(body, classes="assistant-body")
+            container = await self._ensure_active_container()
+            await container.mount(markdown)
+            container.scroll_end(animate=False)
 
 
 class ChatView(Widget):
