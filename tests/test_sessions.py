@@ -45,6 +45,20 @@ def test_parse_fallback_id_from_filename(tmp_path: Path) -> None:
     assert session.id == path.stem
 
 
+def test_agents_md_injection_is_ignored_for_titles() -> None:
+    messages = [
+        Message(
+            "user",
+            "# AGENTS.md instructions for /proj/x\n\n"
+            "<INSTRUCTIONS>\n# AGENTS.md\n仓库说明\n",
+        ),
+        Message("user", "<environment_context>\n  <cwd>/proj/x</cwd>"),
+        Message("user", "根据README帮我写脚本"),
+    ]
+    assert is_injected_message(messages[0].content)
+    assert generate_title(messages) == "根据README帮我写脚本"
+
+
 def test_store_scans_nested_layout_and_groups_by_project(tmp_path: Path) -> None:
     make_session_file(
         tmp_path,

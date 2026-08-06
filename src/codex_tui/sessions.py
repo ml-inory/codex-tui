@@ -33,6 +33,7 @@ INJECTED_PREFIXES: tuple[str, ...] = (
     "<skill",
     "<codex_internal_context",
     "<system",
+    "# AGENTS.md",
 )
 
 IMAGE_TAG_RE = re.compile(r"<image[^>]*>(?:</image>)?")
