@@ -135,6 +135,42 @@ class BrokenInteractive:
         yield  # pragma: no cover - makes this an async generator
 
 
+class BackgroundFake:
+    """Interactive-like runner that holds turns open until released."""
+
+    def __init__(self) -> None:
+        self.interactive = True
+        self.release_all: asyncio.Event = asyncio.Event()
+        self.calls: list[dict] = []
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def interrupt(self, thread_id: str | None = None) -> None:
+        pass
+
+    async def run_turn(
+        self,
+        *,
+        project: str,
+        prompt: str,
+        session_id: str | None = None,
+        model: str | None = None,
+    ):
+        self.calls.append(
+            {"project": project, "prompt": prompt, "session_id": session_id}
+        )
+        sid = session_id or "99999999-9999-9999-9999-999999999999"
+        yield {"type": "thread.started", "thread_id": sid}
+        await self.release_all.wait()
+        yield {"type": "agent_message.delta", "text": "done:", "thread_id": sid}
+        yield {"type": "agent_message.delta", "text": " ok", "thread_id": sid}
+        yield {"type": "turn.completed", "status": "completed", "thread_id": sid}
+
+
 def test_app_mounts_empty_state(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = CodexTuiApp(sessions_dir=tmp_path)
@@ -145,6 +181,123 @@ def test_app_mounts_empty_state(tmp_path: Path) -> None:
             assert len(app.query_one("#project-list", ListView).children) == 0
             hint = app.query_one("#sidebar-hint", Static)
             assert hint.display and "No projects" in str(hint.content)
+
+    _run(scenario())
+
+
+def test_background_turn_notifies_and_jump_opens_finished_session(
+    tmp_path: Path,
+) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+    fake = BackgroundFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "do it"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: len(fake.calls) == 1)
+            assert session_a in app._active_sessions
+            assert app.turn_active
+
+            # Browse another session while the first is still working.
+            await app._project_selected("/proj/a", select_id=session_b)
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == session_b
+            assert not app._current_running()
+
+            fake.release_all.set()
+            assert await _wait_until(
+                pilot, lambda: session_a in app._finished_sessions
+            )
+            assert app.current_session is not None
+            assert app.current_session.id == session_b
+            assert not app.turn_active
+
+            # Jump to the finished session with the shortcut.
+            await pilot.press("ctrl+g")
+            assert await _wait_until(
+                pilot,
+                lambda: app.current_session is not None
+                and app.current_session.id == session_a,
+            )
+            assert session_a not in app._finished_sessions
+
+    _run(scenario())
+
+
+def test_send_in_second_session_while_first_runs(tmp_path: Path) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+    fake = BackgroundFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Mount opens the newest session (B). Start a turn there.
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "first"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: len(fake.calls) == 1)
+            assert prompt_input.disabled is True
+
+            # Switch to A and start a second turn while B still runs.
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+            assert prompt_input.disabled is False
+            prompt_input.focus()
+            prompt_input.value = "second"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: len(fake.calls) == 2)
+            assert {call["session_id"] for call in fake.calls} == {
+                session_a,
+                session_b,
+            }
+            assert app.turn_active
+
+            fake.release_all.set()
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            # A is the session being viewed, so it is not marked finished;
+            # only the background session B gets a completion marker.
+            assert session_a not in app._finished_sessions
+            assert session_b in app._finished_sessions
+            assert await _wait_until(pilot, lambda: app._completed_turns == 2)
+            assert prompt_input.disabled is False
 
     _run(scenario())
 

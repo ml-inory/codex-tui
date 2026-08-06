@@ -69,6 +69,11 @@ class AppServerClient:
         self._notifications: asyncio.Queue[tuple[str, dict[str, Any]]] = (
             asyncio.Queue()
         )
+        # threadId -> queue; turns subscribe so concurrent turns on different
+        # threads never steal each other's notifications.
+        self._listeners: dict[
+            str, asyncio.Queue[tuple[str, dict[str, Any]]]
+        ] = {}
         self._next_id = 1
         self._closed = False
 
@@ -218,8 +223,67 @@ class AppServerClient:
                 fut.set_result(obj)
             return
         method = obj.get("method")
-        if method:
+        if not method:
+            return
+        params = obj.get("params") or {}
+        if method == _SERVER_EXITED:
+            for queue in list(self._listeners.values()):
+                queue.put_nowait((_SERVER_EXITED, {}))
             self._notifications.put_nowait((method, obj.get("params") or {}))
+            return
+        thread_id = params.get("threadId")
+        queue = self._listeners.get(thread_id) if thread_id else None
+        if queue is not None:
+            queue.put_nowait((method, params))
+        else:
+            self._notifications.put_nowait((method, params))
+
+    def subscribe(self, thread_id: str) -> asyncio.Queue:
+        """Register a per-thread notification queue."""
+        queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        self._listeners[thread_id] = queue
+        return queue
+
+    def unsubscribe(self, thread_id: str) -> None:
+        self._listeners.pop(thread_id, None)
+
+    async def consume_stream(
+        self,
+        queue: asyncio.Queue,
+        turn_id: str,
+    ) -> AsyncIterator[TurnEvent]:
+        """Turn notifications on one thread into streamed events."""
+        while True:
+            method, params = await queue.get()
+            if method == _SERVER_EXITED:
+                raise CodexRunError("codex app-server exited during the turn")
+            if params.get("turnId") and params["turnId"] != turn_id:
+                continue
+            if method == "item/agentMessage/delta":
+                delta = params.get("delta") or ""
+                if delta:
+                    yield TurnEvent(
+                        "delta",
+                        text=delta,
+                        item_id=params.get("itemId"),
+                        turn_id=turn_id,
+                    )
+            elif method == "item/completed":
+                item = params.get("item") or {}
+                if item.get("type") == "agent_message":
+                    yield TurnEvent(
+                        "item_completed",
+                        text=item.get("text") or "",
+                        item_id=item.get("id"),
+                        turn_id=turn_id,
+                    )
+            elif method == "turn/completed":
+                yield TurnEvent(
+                    "turn_completed",
+                    turn_id=params.get("turnId") or turn_id,
+                    status=params.get("status"),
+                )
+                return
 
     def _handle_server_request(self, obj: dict[str, Any]) -> None:
         msg_id = obj.get("id")
@@ -361,6 +425,8 @@ class InteractiveCodexRunner:
         self._client: AppServerClient | None = None
         self._thread_id: str | None = None
         self._turn_id: str | None = None
+        # threadId -> active turn id, for background multi-session turns.
+        self._turns: dict[str, str] = {}
 
     @property
     def interactive(self) -> bool:
@@ -377,11 +443,17 @@ class InteractiveCodexRunner:
             self._client = None
         self._thread_id = None
         self._turn_id = None
+        self._turns.clear()
 
-    async def interrupt(self) -> None:
-        if self._client is not None and self._thread_id and self._turn_id:
+    async def interrupt(self, thread_id: str | None = None) -> None:
+        if self._client is None:
+            return
+        if thread_id is None:
+            thread_id = self._thread_id
+        turn_id = self._turns.get(thread_id or "")
+        if thread_id and turn_id:
             try:
-                await self._client.interrupt(self._thread_id, self._turn_id)
+                await self._client.interrupt(thread_id, turn_id)
             except CodexRunError:
                 pass
 
@@ -414,54 +486,19 @@ class InteractiveCodexRunner:
         self._turn_id = None
         yield {"type": "thread.started", "thread_id": thread_id}
 
-        turn_id = await client.start_turn(thread_id, prompt, model=model)
-        self._turn_id = turn_id
+        queue = client.subscribe(thread_id)
         try:
-            async for event in self._stream_turn(client, thread_id, turn_id):
-                yield event.to_dict()
+            turn_id = await client.start_turn(thread_id, prompt, model=model)
+            self._turn_id = turn_id
+            self._turns[thread_id] = turn_id
+            async for event in client.consume_stream(queue, turn_id):
+                yield {**event.to_dict(), "thread_id": thread_id}
                 if event.kind == "turn_completed":
                     self._turn_id = None
+                    self._turns.pop(thread_id, None)
         except BaseException:
             self._turn_id = None
+            self._turns.pop(thread_id, None)
             raise
-
-    async def _stream_turn(
-        self,
-        client: AppServerClient,
-        thread_id: str,
-        turn_id: str,
-    ) -> AsyncIterator[TurnEvent]:
-        while True:
-            method, params = await client._notifications.get()
-            if method == _SERVER_EXITED:
-                raise CodexRunError("codex app-server exited during the turn")
-            if params.get("threadId") and params["threadId"] != thread_id:
-                continue
-            if params.get("turnId") and params["turnId"] != turn_id:
-                continue
-            if method == "item/agentMessage/delta":
-                delta = params.get("delta") or ""
-                if delta:
-                    yield TurnEvent(
-                        "delta",
-                        text=delta,
-                        item_id=params.get("itemId"),
-                        turn_id=turn_id,
-                    )
-            elif method == "item/completed":
-                item = params.get("item") or {}
-                if item.get("type") == "agent_message":
-                    text = item.get("text") or ""
-                    yield TurnEvent(
-                        "item_completed",
-                        text=text,
-                        item_id=item.get("id"),
-                        turn_id=turn_id,
-                    )
-            elif method == "turn/completed":
-                yield TurnEvent(
-                    "turn_completed",
-                    turn_id=params.get("turnId") or turn_id,
-                    status=params.get("status"),
-                )
-                return
+        finally:
+            client.unsubscribe(thread_id)
