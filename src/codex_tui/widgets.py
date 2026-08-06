@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from rich.markup import escape
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -103,42 +104,37 @@ class ChatLog(VerticalScroll):
 
     async def render_session(self, session: Session) -> None:
         await self.clear_chat()
+        rows: list[Widget] = []
         for message in session.messages:
             if message.role == "user" and is_injected_message(message.content):
                 continue
-            await self.add_message(message.role, message.content)
+            rows.append(self._build_row(message.role, message.content))
+        if rows:
+            await self.mount(*rows)
+            self.refresh(layout=True)
         self.scroll_end(animate=False)
 
     async def clear_chat(self) -> None:
         await self.remove_children(self.children)
 
-    async def add_message(self, role: str, content: str) -> None:
+    def _build_row(self, role: str, content: str) -> Widget:
         if role == "user":
-            row = Vertical(
-                Static("You", classes="role user"),
-                Static(content, classes="bubble user"),
-                classes="row user",
-            )
-        else:
-            row = Vertical(
-                Static("Codex", classes="role assistant"),
-                Markdown(content, classes="md"),
-                classes="row assistant",
-            )
-        await self.mount(row)
+            # Flat widgets are required: nested containers inside a
+            # VerticalScroll collapse to one line in Textual 8.2.8 once the
+            # content exceeds the viewport (long conversations).
+            return Static(f"[b]You[/b]\n{escape(content)}", classes="bubble user")
+        return Markdown(f"**Codex**\n\n{content}", classes="md")
+
+    async def add_message(self, role: str, content: str) -> None:
+        await self.mount(self._build_row(role, content))
         self.scroll_end(animate=False)
 
     async def add_user_message(self, content: str) -> None:
         await self.add_message("user", content)
 
     async def begin_assistant_message(self) -> None:
-        markdown = Markdown("", classes="md")
-        row = Vertical(
-            Static("Codex", classes="role assistant"),
-            markdown,
-            classes="row assistant",
-        )
-        await self.mount(row)
+        markdown = Markdown("**Codex**", classes="md")
+        await self.mount(markdown)
         self._pending_markdown = markdown
         self.scroll_end(animate=False)
 
@@ -146,7 +142,7 @@ class ChatLog(VerticalScroll):
         if self._pending_markdown is None:
             await self.begin_assistant_message()
         assert self._pending_markdown is not None
-        self._pending_markdown.update(text)
+        self._pending_markdown.update(f"**Codex**\n\n{text}")
         self.scroll_end(animate=False)
 
     async def finish_assistant_message(self) -> None:
