@@ -1,3 +1,6 @@
+import asyncio
+
+from codex_tui.runner import CodexRunError, CodexRunner
 from codex_tui.runner import build_codex_command
 
 
@@ -58,3 +61,18 @@ def test_model_flag_added_for_new_and_resume() -> None:
         sandbox="read-only",
     )
     assert resume_command[resume_command.index("-m") + 1] == "model-b"
+
+
+def test_missing_codex_binary_raises_clear_error() -> None:
+    async def scenario() -> None:
+        runner = CodexRunner(codex_bin="/nonexistent/codex-binary-xyz")
+        try:
+            async for _event in runner.run_turn(project="/tmp", prompt="hi"):
+                pass
+        except CodexRunError as exc:
+            assert "codex executable not found" in str(exc)
+            assert "/nonexistent/codex-binary-xyz" in str(exc)
+            return
+        raise AssertionError("expected CodexRunError")
+
+    asyncio.run(scenario())

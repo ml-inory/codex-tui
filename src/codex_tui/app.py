@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 import time
 
@@ -257,7 +258,7 @@ class CodexTuiApp(App[None]):
                 await chat.show_error(error)
 
 
-def main() -> None:
+def run_cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="codex-tui",
         description="A Codex Desktop-like terminal UI backed by the local codex CLI.",
@@ -278,8 +279,26 @@ def main() -> None:
         default=None,
         help="Override the codex sessions directory (default: $CODEX_HOME/sessions).",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--clean-trash",
+        action="store_true",
+        help="Permanently delete trashed session transcripts and exit.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.clean_trash:
+        store = SessionStore(
+            sessions_dir=Path(args.sessions_dir) if args.sessions_dir else None
+        )
+        removed = store.clean_trash()
+        print(f"Removed {removed} trashed session file(s) from {store.trash_dir}")
+        return 0
 
     runner = CodexRunner(codex_bin=args.codex_bin, sandbox=args.sandbox)
     sessions_dir = Path(args.sessions_dir) if args.sessions_dir else None
     CodexTuiApp(sessions_dir=sessions_dir, runner=runner).run()
+    return 0
+
+
+def main() -> None:
+    raise SystemExit(run_cli(sys.argv[1:]))

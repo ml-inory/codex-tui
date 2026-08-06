@@ -81,13 +81,18 @@ class CodexRunner:
             self.sandbox,
             model,
         )
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            cwd=project,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=project,
+            )
+        except FileNotFoundError as exc:
+            raise CodexRunError(
+                f"codex executable not found: {self.codex_bin}"
+            ) from exc
         assert process.stdout is not None
         try:
             async for raw_line in process.stdout:

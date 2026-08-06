@@ -5,7 +5,7 @@ from pathlib import Path
 
 from textual.widgets import Input, ListView, Markdown, Static
 
-from codex_tui.app import CodexTuiApp
+from codex_tui.app import CodexTuiApp, run_cli
 from codex_tui.runner import CodexRunError
 from codex_tui.screens import ModelScreen, RenameScreen
 from codex_tui.widgets import ChatView, Sidebar
@@ -490,6 +490,19 @@ def test_model_clear_removes_override(tmp_path: Path) -> None:
             assert "model" not in data["11111111-1111-1111-1111-111111111111"]
 
     _run(scenario())
+
+
+def test_run_cli_clean_trash(tmp_path: Path, monkeypatch, capsys) -> None:
+    trash = tmp_path / "trash"
+    trash.mkdir()
+    (trash / "old.jsonl").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("CODEX_TUI_HOME", str(tmp_path))
+
+    code = run_cli(["--clean-trash"])
+
+    assert code == 0
+    assert list(trash.iterdir()) == []
+    assert "Removed 1" in capsys.readouterr().out
 
 
 def test_app_lists_projects_and_sessions(tmp_path: Path) -> None:

@@ -79,3 +79,20 @@ def test_title_override_and_effective_model(tmp_path: Path) -> None:
     assert session.title == "Custom title"
     assert session.effective_model == "deepseek-v4-pro"
     assert session.model == "deepseek-v4-flash"  # parsed model stays intact
+
+
+def test_clean_trash_deletes_files_and_counts(tmp_path: Path) -> None:
+    trash = tmp_path / "trash"
+    trash.mkdir()
+    (trash / "a.jsonl").write_text("x", encoding="utf-8")
+    (trash / "b.jsonl").write_text("y", encoding="utf-8")
+    store = SessionStore(tmp_path, trash_dir=trash)
+
+    assert store.clean_trash() == 2
+    assert list(trash.iterdir()) == []
+    assert store.clean_trash() == 0
+
+
+def test_clean_trash_missing_dir_returns_zero(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path, trash_dir=tmp_path / "nope")
+    assert store.clean_trash() == 0

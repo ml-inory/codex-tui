@@ -182,3 +182,16 @@ class SessionStore:
         self.trash_dir.mkdir(parents=True, exist_ok=True)
         destination = self.trash_dir / f"{session.id}-{session.path.name}"
         shutil.move(str(session.path), str(destination))
+
+    def clean_trash(self) -> int:
+        """Permanently delete trashed transcripts; return the number removed."""
+        if not self.trash_dir.is_dir():
+            return 0
+        removed = 0
+        for path in self.trash_dir.glob("*.jsonl"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        return removed

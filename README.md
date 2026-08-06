@@ -41,6 +41,7 @@ Options:
 | `--sandbox read-only\|workspace-write\|danger-full-access` | Sandbox passed to `codex exec`; default `workspace-write` (edits allowed inside the selected project). Overridable via `CODEX_TUI_SANDBOX`. |
 | `--codex-bin PATH` | Path to the codex binary (default: `codex`). |
 | `--sessions-dir PATH` | Override the sessions directory (default: `$CODEX_HOME/sessions`). |
+| `--clean-trash` | Permanently delete trashed session transcripts and exit. |
 
 ## Key bindings
 
@@ -78,6 +79,8 @@ moved to `~/.codex-tui/trash` instead of being erased.
   approval prompts: the `--sandbox` value controls what Codex may do.
   `workspace-write` allows file changes inside the selected project;
   `read-only` forbids writes; `danger-full-access` allows anything.
+- If the `codex` binary is missing, sending a message shows an in-app error
+  instead of crashing.
 - Replies arrive per completed turn (the JSON exec mode emits whole
   `item.completed` messages, not character-by-character deltas).
 
