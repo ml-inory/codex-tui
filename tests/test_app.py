@@ -371,6 +371,85 @@ def test_copy_last_reply_and_conversation(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_sidebar_shows_deepest_dir_and_toggle_shows_full_path(
+    tmp_path: Path,
+) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/deep/nested",
+        user_text="hello",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            project_list = app.query_one("#project-list", ListView)
+            label = project_list.children[0].query_one(Static)
+            assert str(label.content) == "nested"
+            assert label.tooltip == "/proj/deep/nested"
+
+            app.action_toggle_project_path()
+            assert await _wait_until(
+                pilot,
+                lambda: str(project_list.children[0].query_one(Static).content)
+                == "/proj/deep/nested",
+            )
+            app.action_toggle_project_path()
+            assert await _wait_until(
+                pilot,
+                lambda: str(project_list.children[0].query_one(Static).content)
+                == "nested",
+            )
+
+    _run(scenario())
+
+
+def test_project_mode_persists(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+
+    async def scenario() -> None:
+        first = CodexTuiApp(sessions_dir=tmp_path, settings_path=settings_path)
+        async with first.run_test() as pilot:
+            await pilot.pause()
+            first.action_toggle_project_path()
+            await pilot.pause(0.2)
+        assert settings_path.is_file()
+        assert "full" in settings_path.read_text(encoding="utf-8")
+
+        second = CodexTuiApp(sessions_dir=tmp_path, settings_path=settings_path)
+        assert second.settings.project_mode == "full"
+
+    _run(scenario())
+
+
+def test_key_help_screen_lists_bindings(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("f1")
+            assert await _wait_until(
+                pilot,
+                lambda: type(app.screen).__name__ == "KeyHelpScreen",
+            )
+            rows = app.screen.query_one("#key-help-list", ListView).children
+            text = " ".join(
+                str(row.query_one(Static).content) for row in rows
+            )
+            assert "ctrl+o" in text.lower()
+            assert "f1" in text.lower()
+            assert "Switch" in text
+            await pilot.press("escape")
+            assert await _wait_until(
+                pilot,
+                lambda: type(app.screen).__name__ == "Screen",
+            )
+
+    _run(scenario())
+
+
 def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> None:
     fake = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
 

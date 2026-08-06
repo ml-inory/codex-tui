@@ -182,3 +182,58 @@ class QuickSwitchScreen(ModalScreen[Session | None]):
             )
         if filtered:
             list_view.index = 0
+
+
+class KeyHelpScreen(ModalScreen[None]):
+    """Searchable overview of all app key bindings."""
+
+    BINDINGS = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("enter", "close", "Close"),
+    ]
+
+    def __init__(self, bindings: list[tuple[str, str, str]]) -> None:
+        super().__init__()
+        # (key, action, description)
+        self.all_bindings = bindings
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="key-help-dialog"):
+            yield Static("Keyboard shortcuts", classes="dialog-title")
+            yield Input(
+                placeholder="Filter key, action or description…",
+                id="key-help-input",
+            )
+            yield ListView(id="key-help-list")
+
+    async def on_mount(self) -> None:
+        await self._rebuild("")
+        self.query_one("#key-help-input", Input).focus()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    @on(Input.Changed, "#key-help-input")
+    async def _on_filter_changed(self, event: Input.Changed) -> None:
+        await self._rebuild(event.value)
+
+    async def _rebuild(self, query: str) -> None:
+        needle = query.strip().lower()
+        rows = [
+            (key, description)
+            for key, action, description in self.all_bindings
+            if not needle
+            or needle in key.lower()
+            or needle in action.lower()
+            or needle in description.lower()
+        ]
+        list_view = self.query_one("#key-help-list", ListView)
+        await list_view.clear()
+        for key, description in rows:
+            label = f"{key:<18}{description}"
+            await list_view.append(
+                ListItem(Static(label, classes="key-help-label"))
+            )
+        if rows:
+            list_view.index = 0

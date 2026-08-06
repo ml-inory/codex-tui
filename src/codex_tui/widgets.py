@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Iterable
+from pathlib import Path
 
 from rich.markup import escape
 from rich.text import Text
@@ -65,7 +66,11 @@ class Sidebar(Widget):
         if session is not None:
             self.post_message(self.SessionSelected(session))
 
-    async def set_projects(self, projects: Iterable[str]) -> None:
+    async def set_projects(
+        self,
+        projects: Iterable[str],
+        project_mode: str = "short",
+    ) -> None:
         self._projects = list(projects)
         project_list = self.query_one("#project-list", ListView)
         await project_list.clear()
@@ -75,8 +80,19 @@ class Sidebar(Widget):
             return
         await self._show_hint("")
         for project in self._projects:
-            await project_list.append(ListItem(Static(project, classes="project-label")))
+            label = self._project_label(project, project_mode)
+            static = Static(label, classes="project-label")
+            static.tooltip = project
+            item = ListItem(static)
+            await project_list.append(item)
         project_list.index = 0
+
+    @staticmethod
+    def _project_label(project: str, project_mode: str) -> str:
+        if project_mode == "full":
+            return project
+        name = Path(project).name
+        return name or project
 
     async def set_sessions(
         self,

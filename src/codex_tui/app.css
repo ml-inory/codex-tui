@@ -3,7 +3,9 @@ Screen {
 }
 
 #sidebar {
-    width: 40%;
+    width: 32%;
+    min-width: 28;
+    max-width: 46;
     height: 1fr;
     background: $surface;
     border-right: solid $accent-darken-2;
@@ -136,6 +138,24 @@ Screen {
     border: round $primary-darken-1;
 }
 
+#key-help-dialog {
+    width: 80;
+    height: 70%;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#key-help-input {
+    margin-bottom: 1;
+}
+
+#key-help-list {
+    height: 1fr;
+    border: round $primary-darken-1;
+}
+
 .model-label {
     width: 100%;
     overflow: hidden;
@@ -145,6 +165,11 @@ Screen {
 .switch-label {
     width: 100%;
     overflow: hidden;
+    padding: 0 1;
+}
+
+.key-help-label {
+    width: 100%;
     padding: 0 1;
 }
 
