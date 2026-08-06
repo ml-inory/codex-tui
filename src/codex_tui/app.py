@@ -71,7 +71,7 @@ class CodexTuiApp(App[None]):
             "Next session",
             show=True,
         ),
-        Binding("ctrl+g", "jump_finished", "Finished", show=True),
+        Binding("ctrl+g", "jump_finished", "Jump done", show=True),
         Binding("ctrl+y", "copy_last_reply", "Copy reply", show=True),
         Binding(
             "ctrl+shift+y",
@@ -431,7 +431,7 @@ class CodexTuiApp(App[None]):
             self._finished_sessions.pop(session_id, None)
         else:
             self._finished_sessions[session_id] = title
-            self.notify(f"会话完成：{title}", timeout=6)
+            self.notify(f"会话完成：{title}（Ctrl+G 跳转）", timeout=6)
             async with self._view_lock:
                 await self._rerender_session_list_locked()
 
