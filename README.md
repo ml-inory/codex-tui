@@ -35,6 +35,9 @@ conversation and a prompt input.
 - Mouse-drag to select chat text and `Ctrl+C` to copy it (OSC 52 clipboard,
   works over SSH in MobaXTerm / Windows Terminal); `Ctrl+Y` copies the last
   Codex reply and `Ctrl+Shift+Y` copies the whole conversation
+- Fixed color scheme: the UI uses hard-coded dark-palette colors (the
+  `textual-dark` look) and Textual is pinned to 8.x, so colors are identical
+  on every machine and terminal regardless of its ANSI palette
 - Delete sessions (moved to `~/.codex-tui/trash`, recoverable)
 - Configurable sandbox so Codex can actually edit project files
 

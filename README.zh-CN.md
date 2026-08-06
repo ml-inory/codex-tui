@@ -25,6 +25,8 @@
 - 鼠标拖拽即可框选聊天文本，按 `Ctrl+C` 复制（OSC 52 剪贴板，MobaXTerm /
   Windows Terminal 等 SSH 终端均支持）；`Ctrl+Y` 复制最后一条 Codex 回复，
   `Ctrl+Shift+Y` 复制整个会话
+- 固定配色：界面颜色全部使用固定的深色色值（即 `textual-dark` 深色方案），
+  并锁定 Textual 8.x，任何机器、任何终端的 ANSI 调色板都不会影响显示效果
 - 删除会话（移到 `~/.codex-tui/trash`，可恢复）
 - 可配置沙箱，让 Codex 能真正修改项目文件
 

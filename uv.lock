@@ -16,7 +16,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "textual", specifier = ">=3.0" }]
+requires-dist = [{ name = "textual", specifier = ">=8.2,<9" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]

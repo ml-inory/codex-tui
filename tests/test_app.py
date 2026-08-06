@@ -195,6 +195,16 @@ def test_app_mounts_empty_state(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_theme_is_locked_to_textual_dark(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.theme == "textual-dark"
+
+    _run(scenario())
+
+
 def test_background_turn_notifies_and_jump_opens_finished_session(
     tmp_path: Path,
 ) -> None:

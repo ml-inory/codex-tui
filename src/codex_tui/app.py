@@ -145,6 +145,9 @@ class CodexTuiApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # Fixed dark palette so every terminal/machine renders the same colors
+        # (the app CSS uses explicit hex values, no theme tokens).
+        self.theme = "textual-dark"
         self.query_one(Sidebar).display = self.settings.sidebar_visible
         self.query_one(WatchPane).display = False
         await self._backfill_titles()
