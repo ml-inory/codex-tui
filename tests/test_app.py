@@ -826,3 +826,121 @@ def test_multiple_projects_group_sessions(tmp_path: Path) -> None:
             assert app.current_session.project == "/proj/b"
 
     _run(scenario())
+
+
+def test_quick_switch_jumps_across_projects(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="hello alpha",
+    )
+    make_session_file(
+        tmp_path,
+        session_id="22222222-2222-2222-2222-222222222222",
+        cwd="/proj/b",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="world beta",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.current_project == "/proj/b"
+            assert app.current_session is not None
+            assert app.current_session.id == "22222222-2222-2222-2222-222222222222"
+            await pilot.press("ctrl+o")
+            assert await _wait_until(
+                pilot,
+                lambda: type(app.screen).__name__ == "QuickSwitchScreen",
+            )
+            quick_input = app.screen.query_one("#quick-switch-input", Input)
+            quick_input.value = "alpha"
+            assert await _wait_until(
+                pilot,
+                lambda: len(
+                    app.screen.query_one("#quick-switch-list", ListView).children
+                )
+                == 1,
+            )
+            await pilot.press("enter")
+            assert await _wait_until(
+                pilot,
+                lambda: app.current_project == "/proj/a"
+                and app.current_session is not None
+                and app.current_session.id == "11111111-1111-1111-1111-111111111111",
+            )
+
+    _run(scenario())
+
+
+def test_session_cycle_keys_move_through_sessions(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id="22222222-2222-2222-2222-222222222222",
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == "22222222-2222-2222-2222-222222222222"
+            await pilot.press("ctrl+down")
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == "11111111-1111-1111-1111-111111111111"
+            await pilot.press("ctrl+down")
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == "22222222-2222-2222-2222-222222222222"
+            await pilot.press("ctrl+up")
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == "11111111-1111-1111-1111-111111111111"
+
+    _run(scenario())
+
+
+def test_refresh_keeps_current_session_selected(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id="22222222-2222-2222-2222-222222222222",
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app._project_selected("/proj/a", select_id="11111111-1111-1111-1111-111111111111")
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == "11111111-1111-1111-1111-111111111111"
+            await app.refresh_sessions()
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == "11111111-1111-1111-1111-111111111111"
+
+    _run(scenario())

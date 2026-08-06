@@ -14,6 +14,10 @@ conversation and a prompt input.
 - Start a new session or resume an existing one; replies stream in
   token-by-token through a persistent `codex app-server` connection (the same
   protocol Codex Desktop uses), so it feels like the native CLI
+- Jump between any sessions instantly with `Ctrl+O` (type to filter by title
+  or project) or cycle through the current project's sessions with
+  `Ctrl+Up` / `Ctrl+Down`; the sidebar keeps your current selection when the
+  session list refreshes
 - `Esc` interrupts the model mid-reply
 - Delete sessions (moved to `~/.codex-tui/trash`, recoverable)
 - Configurable sandbox so Codex can actually edit project files
@@ -58,6 +62,8 @@ Options:
 | `F3` | Pick the model for the session (from `~/.codex/models.json`) |
 | `F5` | Refresh projects / sessions |
 | `F7` | Load earlier messages of the current conversation |
+| `Ctrl+O` | Quick-switch to any session (type to filter, Enter to open) |
+| `Ctrl+Up` / `Ctrl+Down` (or `Alt+Up` / `Alt+Down`) | Cycle through sessions of the current project |
 | `Esc` | Interrupt the running turn |
 | `q` | Quit (confirm with `Ctrl+Q`) |
 
