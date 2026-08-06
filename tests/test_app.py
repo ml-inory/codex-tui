@@ -74,6 +74,67 @@ class FakeCodex:
         yield {"type": "turn.completed"}
 
 
+class StreamingFake:
+    """Fake interactive runner that emits token-level deltas."""
+
+    def __init__(self, sessions_dir: Path, session_id: str) -> None:
+        self.sessions_dir = sessions_dir
+        self.session_id = session_id
+        self.calls: list[dict] = []
+        self.interactive = True
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def interrupt(self) -> None:
+        pass
+
+    async def run_turn(
+        self,
+        *,
+        project: str,
+        prompt: str,
+        session_id: str | None = None,
+        model: str | None = None,
+    ):
+        self.calls.append(
+            {"project": project, "prompt": prompt, "session_id": session_id}
+        )
+        make_session_file(
+            self.sessions_dir,
+            session_id=session_id or self.session_id,
+            cwd=project,
+            timestamp="2026-08-07T04:00:00.000Z",
+            user_text=prompt,
+            assistant_text="Hello world",
+        )
+        yield {"type": "thread.started", "thread_id": "stream-1"}
+        yield {"type": "agent_message.delta", "text": "Hel"}
+        yield {"type": "agent_message.delta", "text": "lo "}
+        yield {"type": "agent_message.delta", "text": "world"}
+        yield {"type": "turn.completed", "status": "completed"}
+
+
+class BrokenInteractive:
+    """Interactive runner whose turn fails after a successful mount."""
+
+    def __init__(self) -> None:
+        self.interactive = True
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def run_turn(self, **kwargs):
+        raise CodexRunError("backend exploded")
+        yield  # pragma: no cover - makes this an async generator
+
+
 def test_app_mounts_empty_state(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = CodexTuiApp(sessions_dir=tmp_path)
@@ -117,6 +178,49 @@ def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> Non
 
             markdowns = list(app.query_one("#chat-log").query(Markdown))
             assert len(markdowns) == 1
+
+    _run(scenario())
+
+
+def test_send_prompt_streams_deltas_and_renders_markdown(tmp_path: Path) -> None:
+    fake = StreamingFake(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "stream me"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: bool(fake.calls))
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            chat_log = app.query_one("#chat-log")
+            markdowns = list(chat_log.query(Markdown))
+            assert len(markdowns) == 1
+            assert "Hello world" in (markdowns[0].source or "")
+
+    _run(scenario())
+
+
+def test_broken_interactive_turn_falls_back_to_exec(tmp_path: Path) -> None:
+    fallback = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
+
+    async def scenario() -> None:
+        app = CodexTuiApp(
+            sessions_dir=tmp_path,
+            runner=BrokenInteractive(),
+            fallback_runner=fallback,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "please retry"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: bool(fallback.calls))
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            markdowns = list(app.query_one("#chat-log").query(Markdown))
+            assert len(markdowns) == 1
+            assert "Hi from codex" in (markdowns[0].source or "")
 
     _run(scenario())
 

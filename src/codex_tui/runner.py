@@ -64,6 +64,20 @@ class CodexRunner:
         self.sandbox = sandbox
         self.model = model
 
+    @property
+    def interactive(self) -> bool:
+        """True when the runner keeps a live streaming backend."""
+        return False
+
+    async def start(self) -> None:
+        """Lifecycle hook; the non-interactive runner needs no setup."""
+
+    async def stop(self) -> None:
+        """Lifecycle hook; the non-interactive runner needs no teardown."""
+
+    async def interrupt(self) -> None:
+        """Lifecycle hook; ``codex exec`` turns cannot be interrupted."""
+
     async def run_turn(
         self,
         *,

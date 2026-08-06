@@ -23,6 +23,7 @@ from codex_tui.sessions import (
     SessionStore,
     generate_title,
 )
+from codex_tui.streaming import InteractiveCodexRunner
 from codex_tui.widgets import ChatLog, ChatView, Sidebar
 
 
@@ -43,6 +44,7 @@ class CodexTuiApp(App[None]):
         Binding("f3", "pick_model", "Model", show=True),
         Binding("f5", "refresh_sessions", "Refresh", show=True),
         Binding("f7", "load_earlier", "Earlier", show=True),
+        Binding("escape", "interrupt_turn", "Interrupt", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -53,6 +55,7 @@ class CodexTuiApp(App[None]):
         trash_dir: Path | None = None,
         overrides_path: Path | None = None,
         model_catalog_path: Path | None = None,
+        fallback_runner: CodexRunner | None = None,
     ) -> None:
         super().__init__()
         self.store = SessionStore(sessions_dir, trash_dir)
@@ -61,6 +64,7 @@ class CodexTuiApp(App[None]):
         self.runner = runner or CodexRunner(
             sandbox=os.environ.get("CODEX_TUI_SANDBOX", "workspace-write")
         )
+        self.fallback_runner = fallback_runner
         self.current_session: Session | None = None
         self.current_project: str | None = None
         # Named to avoid Textual's internal `_running` app flag.
@@ -76,8 +80,30 @@ class CodexTuiApp(App[None]):
 
     async def on_mount(self) -> None:
         await self._backfill_titles()
+        if getattr(self.runner, "interactive", False):
+            try:
+                await self.runner.start()
+            except (CodexRunError, OSError) as exc:
+                if self.fallback_runner is not None:
+                    self.notify(
+                        f"Streaming backend unavailable ({exc}); using exec mode",
+                        severity="warning",
+                        timeout=8,
+                    )
+                    self.runner = self.fallback_runner
+                else:
+                    self.notify(
+                        f"Streaming backend failed: {exc}",
+                        severity="error",
+                        timeout=8,
+                    )
         await self.refresh_sessions()
         self.set_focus(self.query_one(Input))
+
+    async def on_unmount(self) -> None:
+        stop = getattr(self.runner, "stop", None)
+        if stop is not None:
+            await stop()
 
     async def _backfill_titles(self) -> None:
         """Persist meaningful titles for sessions whose first user message was
@@ -238,6 +264,15 @@ class CodexTuiApp(App[None]):
 
         self.push_screen(RenameScreen(current.title), on_rename)
 
+    def action_interrupt_turn(self) -> None:
+        if not self.turn_active:
+            return
+        self.notify("Interrupting…")
+        self.run_worker(self._interrupt_turn(), name="codex-interrupt")
+
+    async def _interrupt_turn(self) -> None:
+        await self.runner.interrupt()
+
     @on(Input.Submitted, "#prompt-input")
     def _on_prompt_submitted(self, event: Input.Submitted) -> None:
         prompt = event.value.strip()
@@ -265,22 +300,51 @@ class CodexTuiApp(App[None]):
 
         error: str | None = None
         thread_id: str | None = None
+        got_delta = False
         try:
-            async for event in self.runner.run_turn(
-                project=project,
-                prompt=prompt,
-                session_id=session_id,
-                model=model,
-            ):
-                if event.get("type") == "thread.started":
-                    thread_id = str(event.get("thread_id") or "")
-                if event.get("type") != "item.completed":
-                    continue
-                item = event.get("item") or {}
-                if item.get("type") == "agent_message" and item.get("text"):
-                    await chat.update_assistant_message(str(item["text"]))
-        except CodexRunError as exc:
-            error = str(exc)
+            while True:
+                try:
+                    async for event in self.runner.run_turn(
+                        project=project,
+                        prompt=prompt,
+                        session_id=session_id,
+                        model=model,
+                    ):
+                        event_type = event.get("type")
+                        if event_type == "thread.started":
+                            thread_id = str(event.get("thread_id") or "")
+                        elif event_type == "agent_message.delta":
+                            text = event.get("text") or ""
+                            if text:
+                                got_delta = True
+                                await chat.append_assistant_delta(text)
+                        elif event_type == "item.completed":
+                            item = event.get("item") or {}
+                            if (
+                                item.get("type") == "agent_message"
+                                and item.get("text")
+                                and not got_delta
+                            ):
+                                await chat.update_assistant_message(
+                                    str(item["text"])
+                                )
+                    break
+                except CodexRunError as exc:
+                    if (
+                        getattr(self.runner, "interactive", False)
+                        and self.fallback_runner is not None
+                        and not got_delta
+                    ):
+                        await self.runner.stop()
+                        self.runner = self.fallback_runner
+                        self.notify(
+                            "Streaming backend failed; retrying with codex exec",
+                            severity="warning",
+                            timeout=8,
+                        )
+                        continue
+                    error = str(exc)
+                    break
         finally:
             self.turn_active = False
             if (
@@ -322,6 +386,15 @@ def run_cli(argv: list[str] | None = None) -> int:
         help="Path to the codex CLI binary (default: codex).",
     )
     parser.add_argument(
+        "--mode",
+        choices=("auto", "interactive", "exec"),
+        default=os.environ.get("CODEX_TUI_MODE", "auto"),
+        help=(
+            "Turn backend: interactive uses `codex app-server` for streaming "
+            "deltas, exec uses one-shot `codex exec --json` (default: auto)."
+        ),
+    )
+    parser.add_argument(
         "--sessions-dir",
         default=None,
         help="Override the codex sessions directory (default: $CODEX_HOME/sessions).",
@@ -341,9 +414,20 @@ def run_cli(argv: list[str] | None = None) -> int:
         print(f"Removed {removed} trashed session file(s) from {store.trash_dir}")
         return 0
 
-    runner = CodexRunner(codex_bin=args.codex_bin, sandbox=args.sandbox)
+    fallback = None
+    if args.mode in ("auto", "interactive"):
+        runner = InteractiveCodexRunner(
+            codex_bin=args.codex_bin, sandbox=args.sandbox
+        )
+        fallback = CodexRunner(codex_bin=args.codex_bin, sandbox=args.sandbox)
+    else:
+        runner = CodexRunner(codex_bin=args.codex_bin, sandbox=args.sandbox)
     sessions_dir = Path(args.sessions_dir) if args.sessions_dir else None
-    CodexTuiApp(sessions_dir=sessions_dir, runner=runner).run()
+    CodexTuiApp(
+        sessions_dir=sessions_dir,
+        runner=runner,
+        fallback_runner=fallback,
+    ).run()
     return 0
 
 

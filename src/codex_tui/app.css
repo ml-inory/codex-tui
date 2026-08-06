@@ -76,6 +76,10 @@ Screen {
     padding: 0 1 1 1;
 }
 
+.bubble.streaming {
+    padding-bottom: 1;
+}
+
 .md {
     width: 1fr;
     padding-bottom: 1;
