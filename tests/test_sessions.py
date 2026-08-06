@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from codex_tui.sessions import Session, SessionStore, parse_session_file
+from codex_tui.sessions import (
+    Message,
+    Session,
+    SessionStore,
+    generate_title,
+    is_injected_message,
+    parse_session_file,
+)
 from tests.helpers import make_session_file
 
 
@@ -96,3 +103,41 @@ def test_clean_trash_deletes_files_and_counts(tmp_path: Path) -> None:
 def test_clean_trash_missing_dir_returns_zero(tmp_path: Path) -> None:
     store = SessionStore(tmp_path, trash_dir=tmp_path / "nope")
     assert store.clean_trash() == 0
+
+
+def test_is_injected_message_detects_system_context() -> None:
+    assert is_injected_message("<environment_context>\n  <cwd>/tmp</cwd>")
+    assert is_injected_message("<turn_aborted>\nThe user interrupted the turn")
+    assert is_injected_message("<skill>\n<name>magnetar</name>")
+    assert is_injected_message("<codex_internal_context source=\"goal\">")
+    assert not is_injected_message("有没有需要提交的代码")
+    assert not is_injected_message("<image name=\"x\"></image>C++和Python哪个好")
+
+
+def test_generate_title_skips_injected_and_picks_first_question() -> None:
+    messages = [
+        Message("user", "<environment_context>\n  <cwd>/home/user</cwd>"),
+        Message("user", "有没有需要提交的代码"),
+        Message("assistant", "我先看看"),
+    ]
+    assert generate_title(messages) == "有没有需要提交的代码"
+
+
+def test_generate_title_handles_image_lines_and_truncation() -> None:
+    messages = [
+        Message("user", "<image name=\"x\"></image>C++和Python哪个好"),
+    ]
+    assert generate_title(messages) == "C++和Python哪个好"
+
+    long_message = Message("user", "很" * 60)
+    title = generate_title([long_message])
+    assert len(title) == 58 and title.endswith("…")
+
+
+def test_title_falls_back_to_session_id_without_real_question() -> None:
+    session = Session(
+        id="019f0000-0000-0000-0000-000000000001",
+        path=Path("/tmp/x.jsonl"),
+        messages=[Message("user", "<turn_aborted>\nThe user interrupted")],
+    )
+    assert session.title == "Session 019f0000"

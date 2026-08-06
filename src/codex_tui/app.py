@@ -17,7 +17,12 @@ from codex_tui.overrides import Overrides
 from codex_tui.models import load_model_catalog
 from codex_tui.runner import CodexRunner, CodexRunError
 from codex_tui.screens import ModelScreen, RenameScreen
-from codex_tui.sessions import Session, SessionStore
+from codex_tui.sessions import (
+    INJECTED_PREFIXES,
+    Session,
+    SessionStore,
+    generate_title,
+)
 from codex_tui.widgets import ChatView, Sidebar
 
 
@@ -69,8 +74,34 @@ class CodexTuiApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        await self._backfill_titles()
         await self.refresh_sessions()
         self.set_focus(self.query_one(Input))
+
+    async def _backfill_titles(self) -> None:
+        """Persist meaningful titles for sessions whose first user message was
+        system-injected context (idempotent; skipped once an override exists)."""
+        for session in self.store.list_sessions():
+            if session.title_override:
+                continue
+            first_user = next(
+                (m for m in session.messages if m.role == "user"), None
+            )
+            if first_user is None:
+                continue
+            raw_first_line = (
+                first_user.content.lstrip().splitlines()[0]
+                if first_user.content.strip()
+                else ""
+            )
+            meaningful = bool(raw_first_line) and not raw_first_line.startswith(
+                INJECTED_PREFIXES
+            )
+            if meaningful:
+                continue
+            generated = generate_title(session.messages)
+            if generated:
+                self.overrides.set(session.id, "title", generated)
 
     async def action_new_session(self) -> None:
         if self.turn_active:
@@ -256,6 +287,14 @@ class CodexTuiApp(App[None]):
             await self.refresh_sessions()
             if error:
                 await chat.show_error(error)
+            if (
+                self.current_session is not None
+                and not self.current_session.title_override
+            ):
+                generated = generate_title(self.current_session.messages)
+                if generated:
+                    self.overrides.set(self.current_session.id, "title", generated)
+                    await self.refresh_sessions()
 
 
 def run_cli(argv: list[str] | None = None) -> int:

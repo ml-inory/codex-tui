@@ -505,6 +505,121 @@ def test_run_cli_clean_trash(tmp_path: Path, monkeypatch, capsys) -> None:
     assert "Removed 1" in capsys.readouterr().out
 
 
+def test_backfill_titles_for_injected_context_sessions(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="<environment_context>\n  <cwd>/proj/a</cwd>",
+        assistant_text="ok",
+        extra_events=[],
+    )
+    # Append a real question after the injected context.
+    session_path = (
+        tmp_path
+        / "2026"
+        / "08"
+        / "07"
+        / "rollout-2026-08-07T02-54-37-11111111-1111-1111-1111-111111111111.jsonl"
+    )
+    session_path.write_text(
+        session_path.read_text(encoding="utf-8")
+        + json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "这是第一个问题"}],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    make_session_file(
+        tmp_path,
+        session_id="22222222-2222-2222-2222-222222222222",
+        cwd="/proj/b",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="正常标题",
+    )
+    overrides_path = tmp_path / "overrides.json"
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, overrides_path=overrides_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            assert overrides_path.is_file()
+            data = json.loads(overrides_path.read_text(encoding="utf-8"))
+            assert (
+                data["11111111-1111-1111-1111-111111111111"]["title"]
+                == "这是第一个问题"
+            )
+            assert "22222222-2222-2222-2222-222222222222" not in data
+
+    _run(scenario())
+
+
+def test_injected_context_is_hidden_from_chat(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="<environment_context>\n  <cwd>/proj/a</cwd>",
+        assistant_text="你好",
+        extra_events=[
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "真实问题"}],
+                },
+            }
+        ],
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            statics = list(app.query_one("#chat-log").query(Static))
+            rendered = " ".join(str(s.content or "") for s in statics)
+            assert "<environment_context>" not in rendered
+            assert "真实问题" in rendered
+            assert "你好" in rendered
+
+    _run(scenario())
+
+
+def test_new_session_gets_auto_title_from_first_message(tmp_path: Path) -> None:
+    overrides_path = tmp_path / "overrides.json"
+    fake = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, overrides_path=overrides_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            await pilot.pause()
+            prompt_input.value = "帮我看看这个仓库"
+            await pilot.press("enter")
+
+            assert await _wait_until(
+                pilot,
+                lambda: overrides_path.exists()
+                and "帮我看看这个仓库"
+                in overrides_path.read_text(encoding="utf-8"),
+            )
+            data = json.loads(overrides_path.read_text(encoding="utf-8"))
+            assert data["99999999-9999-9999-9999-999999999999"]["title"] == "帮我看看这个仓库"
+
+    _run(scenario())
+
+
 def test_app_lists_projects_and_sessions(tmp_path: Path) -> None:
     make_session_file(
         tmp_path,

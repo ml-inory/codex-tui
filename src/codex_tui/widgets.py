@@ -11,7 +11,7 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, ListItem, ListView, Markdown, Static
 
-from codex_tui.sessions import Session
+from codex_tui.sessions import Session, is_injected_message
 
 
 class Sidebar(Widget):
@@ -104,6 +104,8 @@ class ChatLog(VerticalScroll):
     async def render_session(self, session: Session) -> None:
         await self.clear_chat()
         for message in session.messages:
+            if message.role == "user" and is_injected_message(message.content):
+                continue
             await self.add_message(message.role, message.content)
         self.scroll_end(animate=False)
 

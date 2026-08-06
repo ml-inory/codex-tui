@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,21 @@ from typing import Any
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
 DEFAULT_CODEX_TUI_HOME = Path.home() / ".codex-tui"
 TEXT_ITEM_TYPES = ("input_text", "output_text", "text")
+
+# System-injected user messages that carry no user intent.
+INJECTED_PREFIXES: tuple[str, ...] = (
+    "<environment_context",
+    "<permissions instructions",
+    "<collaboration_mode",
+    "<skills_instructions",
+    "<multi_agent_mode",
+    "<turn_aborted",
+    "<skill",
+    "<codex_internal_context",
+    "<system",
+)
+
+IMAGE_TAG_RE = re.compile(r"<image[^>]*>(?:</image>)?")
 
 
 @dataclass
@@ -56,15 +72,12 @@ class Session:
 
     @property
     def title(self) -> str:
-        """Short human-readable title derived from the first user message."""
+        """Short human-readable title: override, first real question, or id."""
         if self.title_override:
             return self.title_override
-        for message in self.messages:
-            if message.role != "user":
-                continue
-            first_line = message.content.strip().splitlines()[0] if message.content.strip() else ""
-            if first_line:
-                return first_line[:60]
+        generated = generate_title(self.messages)
+        if generated:
+            return generated
         return f"Session {self.id[:8]}"
 
 
@@ -80,6 +93,25 @@ def _extract_text(content: Any) -> str:
             if item.get("type") in TEXT_ITEM_TYPES:
                 parts.append(item.get("text") or "")
         return "".join(parts)
+    return ""
+
+
+def is_injected_message(content: str) -> bool:
+    """True for system-injected user messages (context, skills, aborts...)."""
+    stripped = content.lstrip()
+    return stripped.startswith(INJECTED_PREFIXES)
+
+
+def generate_title(messages: list[Message]) -> str:
+    """Short title from the first real user message, skipping injected context."""
+    for message in messages:
+        if message.role != "user" or is_injected_message(message.content):
+            continue
+        for line in message.content.splitlines():
+            line = IMAGE_TAG_RE.sub("", line).strip()
+            if not line:
+                continue
+            return line[:57] + "…" if len(line) > 57 else line
     return ""
 
 
