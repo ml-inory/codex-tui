@@ -8,7 +8,7 @@ from textual.widgets import Input, ListView, Markdown, Static
 from codex_tui.app import CodexTuiApp, run_cli
 from codex_tui.runner import CodexRunError
 from codex_tui.screens import ModelScreen, RenameScreen
-from codex_tui.widgets import ChatView, Sidebar
+from codex_tui.widgets import ChatView, Sidebar, WatchPane
 from tests.helpers import make_session_file
 from tests.helpers import make_many_message_session
 
@@ -138,10 +138,11 @@ class BrokenInteractive:
 class BackgroundFake:
     """Interactive-like runner that holds turns open until released."""
 
-    def __init__(self) -> None:
+    def __init__(self, sessions_dir: Path | None = None) -> None:
         self.interactive = True
         self.release_all: asyncio.Event = asyncio.Event()
         self.calls: list[dict] = []
+        self.sessions_dir = sessions_dir
 
     async def start(self) -> None:
         pass
@@ -166,8 +167,17 @@ class BackgroundFake:
         sid = session_id or "99999999-9999-9999-9999-999999999999"
         yield {"type": "thread.started", "thread_id": sid}
         await self.release_all.wait()
+        text = "done: ok"
         yield {"type": "agent_message.delta", "text": "done:", "thread_id": sid}
         yield {"type": "agent_message.delta", "text": " ok", "thread_id": sid}
+        if self.sessions_dir is not None:
+            make_session_file(
+                self.sessions_dir,
+                session_id=sid,
+                cwd=project,
+                user_text=prompt,
+                assistant_text=text,
+            )
         yield {"type": "turn.completed", "status": "completed", "thread_id": sid}
 
 
@@ -471,6 +481,170 @@ def test_toggle_sidebar_hides_and_persists(tmp_path: Path) -> None:
         async with second.run_test() as pilot:
             await pilot.pause()
             assert second.query_one(Sidebar).display is False
+
+    _run(scenario())
+
+
+def test_split_picker_shows_watch_session_and_closes(tmp_path: Path) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            watch_pane = app.query_one(WatchPane)
+            assert watch_pane.display is False
+            await pilot.press("ctrl+backslash")
+            assert await _wait_until(
+                pilot,
+                lambda: type(app.screen).__name__ == "QuickSwitchScreen",
+            )
+            quick_input = app.screen.query_one("#quick-switch-input", Input)
+            quick_input.value = "older"
+            assert await _wait_until(
+                pilot,
+                lambda: len(
+                    app.screen.query_one("#quick-switch-list", ListView).children
+                )
+                == 1,
+            )
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: watch_pane.display is True)
+            header = app.query_one("#watch-header", Static)
+            assert "/proj/a" in str(header.content)
+            watch_log = app.query_one("#watch-log")
+            assert any(
+                "older" in str(s.content or "") for s in watch_log.query(Static)
+            )
+
+            await pilot.press("ctrl+backslash")
+            assert await _wait_until(pilot, lambda: watch_pane.display is False)
+
+    _run(scenario())
+
+
+def test_swap_panes_swaps_active_and_watch(tmp_path: Path) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Active is B; watch A.
+            await app._open_watch_pane(
+                app.overrides.apply(
+                    next(
+                        s
+                        for s in app.store.sessions_for_project("/proj/a")
+                        if s.id == session_a
+                    )
+                )
+            )
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.id == session_b
+
+            app.action_swap_panes()
+            assert await _wait_until(
+                pilot,
+                lambda: app.current_session is not None
+                and app.current_session.id == session_a,
+            )
+            assert app._watch_session is not None
+            assert app._watch_session.id == session_b
+            header = app.query_one("#watch-header", Static)
+            assert "newer" in str(header.content)
+
+    _run(scenario())
+
+
+def test_watch_pane_streams_background_turn(tmp_path: Path) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+    fake = BackgroundFake(sessions_dir=tmp_path)
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Active is B; start a turn there, then switch to A and watch B.
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "first"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: len(fake.calls) == 1)
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+            session_b_obj = app.overrides.apply(
+                next(
+                    s
+                    for s in app.store.sessions_for_project("/proj/a")
+                    if s.id == session_b
+                )
+            )
+            await app._open_watch_pane(session_b_obj)
+            await pilot.pause()
+            watch_pane = app.query_one(WatchPane)
+            assert watch_pane.display is True
+            assert "Codex is working" in str(
+                app.query_one("#watch-status", Static).content
+            )
+
+            fake.release_all.set()
+            assert await _wait_until(
+                pilot, lambda: app._completed_turns == 1
+            )
+            watch_log = app.query_one("#watch-log")
+            markdowns = list(watch_log.query(Markdown))
+            assert any(
+                "done: ok" in (md.source or "") for md in markdowns
+            )
+            assert "Codex is working" not in str(
+                app.query_one("#watch-status", Static).content
+            )
 
     _run(scenario())
 

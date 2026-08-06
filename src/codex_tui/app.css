@@ -52,6 +52,34 @@ Screen {
     padding: 0 1;
 }
 
+#panes {
+    width: 1fr;
+    height: 1fr;
+    layout: horizontal;
+}
+
+#watch-pane {
+    width: 1fr;
+    height: 1fr;
+    layout: vertical;
+    padding: 0 1;
+    border-left: solid $primary-darken-1;
+}
+
+.watch-header {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+    content-align: left middle;
+    border-bottom: solid $primary-darken-1;
+}
+
+.watch-status {
+    height: auto;
+    padding: 0 1;
+    color: $warning;
+}
+
 #chat-header {
     height: auto;
     padding: 0 1;
