@@ -649,6 +649,50 @@ def test_watch_pane_streams_background_turn(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_sidebar_project_and_session_selection_events(tmp_path: Path) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/b",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            project_list = app.query_one("#project-list", ListView)
+            # Select the second project (mirrors clicking a row below the top).
+            project_list.index = 1
+            await pilot.pause()
+            project_list.focus()
+            await pilot.press("enter")
+            assert await _wait_until(
+                pilot, lambda: app.current_project == "/proj/a"
+            )
+
+            session_list = app.query_one("#session-list", ListView)
+            session_list.focus()
+            await pilot.press("enter")
+            assert await _wait_until(
+                pilot,
+                lambda: app.current_session is not None
+                and app.current_session.id == session_a,
+            )
+
+    _run(scenario())
+
+
 def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> None:
     fake = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
 

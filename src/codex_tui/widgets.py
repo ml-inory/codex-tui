@@ -14,7 +14,11 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, ListItem, ListView, Markdown, Static
 
-from codex_tui.sessions import Message, Session, is_injected_message
+from codex_tui.sessions import (
+    Message as SessionMessage,
+    Session,
+    is_injected_message,
+)
 
 
 DEFAULT_WINDOW = 80
@@ -135,7 +139,7 @@ class ChatLog(VerticalScroll):
         super().__init__(id=id)
         self._pending_stream: Static | None = None
         self._pending_text = ""
-        self._messages: list[Message] = []
+        self._messages: list[SessionMessage] = []
         self._window = DEFAULT_WINDOW
 
     async def render_session(self, session: Session) -> None:
