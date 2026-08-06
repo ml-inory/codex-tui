@@ -98,3 +98,23 @@ Screen {
 .md {
     width: 1fr;
 }
+
+#rename-dialog {
+    width: 60;
+    height: auto;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+    layout: vertical;
+}
+
+.dialog-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.dialog-buttons {
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
+}

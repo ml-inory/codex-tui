@@ -12,7 +12,9 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Input
 
+from codex_tui.overrides import Overrides
 from codex_tui.runner import CodexRunner, CodexRunError
+from codex_tui.screens import RenameScreen
 from codex_tui.sessions import Session, SessionStore
 from codex_tui.widgets import ChatView, Sidebar
 
@@ -26,6 +28,7 @@ class CodexTuiApp(App[None]):
     BINDINGS = [
         Binding("tab", "focus_next", "Next pane", show=True),
         Binding("shift+tab", "focus_previous", "Prev pane", show=True),
+        Binding("ctrl+r", "rename_session", "Rename", show=True),
         Binding("n", "new_session", "New session", show=True),
         Binding("d", "delete_session", "Delete session", show=True),
         Binding("r", "refresh_sessions", "Refresh", show=True),
@@ -37,9 +40,11 @@ class CodexTuiApp(App[None]):
         sessions_dir: Path | None = None,
         runner: CodexRunner | None = None,
         trash_dir: Path | None = None,
+        overrides_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.store = SessionStore(sessions_dir, trash_dir)
+        self.overrides = Overrides.load(overrides_path)
         self.runner = runner or CodexRunner(
             sandbox=os.environ.get("CODEX_TUI_SANDBOX", "workspace-write")
         )
@@ -108,6 +113,8 @@ class CodexTuiApp(App[None]):
             return
         self.current_project = projects[0]
         sessions = self.store.sessions_for_project(projects[0])
+        for index, session in enumerate(sessions):
+            sessions[index] = self.overrides.apply(session)
         await sidebar.set_sessions(sessions)
         if sessions:
             await self.open_session(sessions[0])
@@ -116,6 +123,7 @@ class CodexTuiApp(App[None]):
             await self.query_one(ChatView).show_new_session(projects[0])
 
     async def open_session(self, session: Session) -> None:
+        session = self.overrides.apply(session)
         self.current_session = session
         self.current_project = session.project
         await self.query_one(ChatView).show_session(session)
@@ -126,6 +134,8 @@ class CodexTuiApp(App[None]):
     async def _project_selected(self, project: str) -> None:
         self.current_project = project
         sessions = self.store.sessions_for_project(project)
+        for index, session in enumerate(sessions):
+            sessions[index] = self.overrides.apply(session)
         await self.query_one(Sidebar).set_sessions(sessions)
         if sessions:
             await self.open_session(sessions[0])
@@ -135,6 +145,19 @@ class CodexTuiApp(App[None]):
 
     def on_sidebar_session_selected(self, message: Sidebar.SessionSelected) -> None:
         self.run_worker(self.open_session(message.session))
+
+    def action_rename_session(self) -> None:
+        if self.turn_active or self.current_session is None:
+            self.notify("No session selected", severity="warning")
+            return
+        current = self.current_session
+
+        def on_rename(new_title: str | None) -> None:
+            if new_title:
+                self.overrides.set(current.id, "title", new_title)
+                self.run_worker(self.refresh_sessions())
+
+        self.push_screen(RenameScreen(current.title), on_rename)
 
     @on(Input.Submitted, "#prompt-input")
     def _on_prompt_submitted(self, event: Input.Submitted) -> None:

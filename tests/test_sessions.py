@@ -67,3 +67,15 @@ def test_store_scans_nested_layout_and_groups_by_project(tmp_path: Path) -> None
 def test_store_missing_dir_returns_empty(tmp_path: Path) -> None:
     assert SessionStore(tmp_path / "nope").list_sessions() == []
     assert SessionStore(tmp_path / "nope").list_projects() == []
+
+
+def test_title_override_and_effective_model(tmp_path: Path) -> None:
+    path = make_session_file(tmp_path)
+
+    session = parse_session_file(path)
+    session.title_override = "Custom title"
+    session.model_override = "deepseek-v4-pro"
+
+    assert session.title == "Custom title"
+    assert session.effective_model == "deepseek-v4-pro"
+    assert session.model == "deepseek-v4-flash"  # parsed model stays intact

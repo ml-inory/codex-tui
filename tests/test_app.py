@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from pathlib import Path
 
@@ -229,6 +230,78 @@ def test_single_delete_press_does_not_delete(tmp_path: Path) -> None:
 
             assert app._pending_delete is None
             assert len(list(tmp_path.rglob("*.jsonl"))) == 1
+
+    _run(scenario())
+
+
+def test_rename_session_via_modal_updates_ui_and_persists(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="Old title",
+    )
+    overrides_path = tmp_path / "overrides.json"
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, overrides_path=overrides_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.title == "Old title"
+
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            rename_input = app.screen.query_one("#rename-input", Input)
+            assert rename_input.value == "Old title"
+            rename_input.value = "Renamed Session"
+            await pilot.press("enter")
+
+            assert await _wait_until(
+                pilot,
+                lambda: app.current_session is not None
+                and app.current_session.title == "Renamed Session",
+            )
+            header = app.query_one("#chat-header", Static)
+            assert "Renamed Session" in str(header.content)
+
+            data = json.loads(overrides_path.read_text(encoding="utf-8"))
+            assert (
+                data["11111111-1111-1111-1111-111111111111"]["title"]
+                == "Renamed Session"
+            )
+
+    _run(scenario())
+
+
+def test_rename_persists_across_app_instances(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="Before rename",
+    )
+    overrides_path = tmp_path / "overrides.json"
+
+    async def scenario() -> None:
+        first = CodexTuiApp(sessions_dir=tmp_path, overrides_path=overrides_path)
+        async with first.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            first.screen.query_one("#rename-input", Input).value = "Persistent Name"
+            await pilot.press("enter")
+            assert await _wait_until(
+                pilot,
+                lambda: first.current_session is not None
+                and first.current_session.title == "Persistent Name",
+            )
+
+        second = CodexTuiApp(sessions_dir=tmp_path, overrides_path=overrides_path)
+        async with second.run_test() as pilot:
+            await pilot.pause()
+            assert second.current_session is not None
+            assert second.current_session.title == "Persistent Name"
 
     _run(scenario())
 

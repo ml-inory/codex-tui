@@ -167,7 +167,7 @@ class ChatView(Widget):
             header.update("Select a project and session")
             await chat_log.clear_chat()
             return
-        model = session.model or "codex"
+        model = session.effective_model or "codex"
         header.update(f"{session.project}  |  {session.title}  |  {model}")
         await chat_log.render_session(session)
 

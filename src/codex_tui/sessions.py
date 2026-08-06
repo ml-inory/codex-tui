@@ -41,6 +41,8 @@ class Session:
     cwd: str = ""
     model: str | None = None
     messages: list[Message] = field(default_factory=list)
+    title_override: str | None = None
+    model_override: str | None = None
 
     @property
     def project(self) -> str:
@@ -48,8 +50,15 @@ class Session:
         return self.cwd or "?"
 
     @property
+    def effective_model(self) -> str | None:
+        """Model used for display/runner: per-session override or parsed model."""
+        return self.model_override or self.model
+
+    @property
     def title(self) -> str:
         """Short human-readable title derived from the first user message."""
+        if self.title_override:
+            return self.title_override
         for message in self.messages:
             if message.role != "user":
                 continue
