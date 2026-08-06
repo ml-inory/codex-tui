@@ -5,7 +5,9 @@ description = "A Codex Desktop-like terminal UI backed by the local codex CLI"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "textual>=3.0",
+]
 
 [project.scripts]
 codex-tui = "codex_tui.__main__:main"
@@ -25,6 +27,7 @@ packages = ["src/codex_tui"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [dependency-groups]
 dev = ["pytest>=8"]
