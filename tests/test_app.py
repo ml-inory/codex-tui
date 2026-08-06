@@ -336,8 +336,8 @@ def test_mouse_select_and_copy_chat_text(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             await pilot.mouse_down("#chat-log", offset=(2, 1))
-            await pilot.hover("#chat-log", offset=(40, 6))
-            await pilot.mouse_up("#chat-log", offset=(40, 6))
+            await pilot.hover("#chat-log", offset=(40, 10))
+            await pilot.mouse_up("#chat-log", offset=(40, 10))
             await pilot.pause()
             selected = app.screen.get_selected_text()
             assert selected is not None
@@ -764,8 +764,7 @@ def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> Non
             assert app.current_session is not None
             assert app.current_session.title == "hello there"
 
-            markdowns = list(app.query_one("#chat-log").query(Markdown))
-            assert len(markdowns) == 1
+            assert len(app.query_one("#chat-log").visible_widgets()) == 4
 
     _run(scenario())
 
@@ -784,7 +783,8 @@ def test_send_prompt_streams_deltas_and_renders_markdown(tmp_path: Path) -> None
             assert await _wait_until(pilot, lambda: not app.turn_active)
             chat_log = app.query_one("#chat-log")
             markdowns = list(chat_log.query(Markdown))
-            assert len(markdowns) == 1
+            assert len(chat_log.visible_widgets()) == 4
+            assert len(markdowns) == 2
             assert "Hello world" in (markdowns[0].source or "")
 
     _run(scenario())
@@ -806,9 +806,11 @@ def test_broken_interactive_turn_falls_back_to_exec(tmp_path: Path) -> None:
             await pilot.press("enter")
             assert await _wait_until(pilot, lambda: bool(fallback.calls))
             assert await _wait_until(pilot, lambda: not app.turn_active)
-            markdowns = list(app.query_one("#chat-log").query(Markdown))
-            assert len(markdowns) == 1
-            assert "Hi from codex" in (markdowns[0].source or "")
+            chat_log = app.query_one("#chat-log")
+            markdowns = list(chat_log.query(Markdown))
+            assert len(chat_log.visible_widgets()) == 4
+            assert len(markdowns) == 2
+            assert any("Hi from codex" in (md.source or "") for md in markdowns)
 
     _run(scenario())
 
@@ -882,7 +884,7 @@ def test_new_session_action_clears_chat_and_focuses_input(tmp_path: Path) -> Non
 
             assert app.current_session is None
             assert app.focused is app.query_one("#prompt-input", Input)
-            assert len(app.query_one("#chat-log").children) == 0
+            assert len(app.query_one("#chat-log").visible_widgets()) == 0
 
     _run(scenario())
 

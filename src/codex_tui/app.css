@@ -105,17 +105,29 @@ Screen {
     margin: 0 0 1 0;
 }
 
-.bubble.user {
-    background: #242F38;
-    padding: 0 1 1 1;
-}
-
-.bubble.streaming {
+.user-label {
+    text-style: bold;
+    color: cyan;
     padding-bottom: 1;
 }
 
-.md {
+.user-body {
     width: 1fr;
+    padding-bottom: 1;
+}
+
+.assistant-label {
+    text-style: bold;
+    color: magenta;
+    padding-bottom: 1;
+}
+
+.assistant-body {
+    width: 1fr;
+    padding-bottom: 1;
+}
+
+.assistant-body.streaming {
     padding-bottom: 1;
 }
 
