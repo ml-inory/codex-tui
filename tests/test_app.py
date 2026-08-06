@@ -302,6 +302,75 @@ def test_send_in_second_session_while_first_runs(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_mouse_select_and_copy_chat_text(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="What is 2+2?",
+        assistant_text="It is **four**.",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.mouse_down("#chat-log", offset=(2, 1))
+            await pilot.hover("#chat-log", offset=(40, 6))
+            await pilot.mouse_up("#chat-log", offset=(40, 6))
+            await pilot.pause()
+            selected = app.screen.get_selected_text()
+            assert selected is not None
+            assert "What is 2+2?" in selected
+            assert "It is four." in selected
+            app.screen.action_copy_text()
+            assert "What is 2+2?" in (app._clipboard or "")
+            assert "It is four." in (app._clipboard or "")
+
+    _run(scenario())
+
+
+def test_copy_last_reply_and_conversation(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="<environment_context>\n  <cwd>/proj/a</cwd>",
+        assistant_text="你好",
+        extra_events=[
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "真实问题"}],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "这是回答"}],
+                },
+            },
+        ],
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_copy_last_reply()
+            assert app._clipboard == "这是回答"
+            app.action_copy_conversation()
+            assert "真实问题" in app._clipboard
+            assert "这是回答" in app._clipboard
+            assert "<environment_context>" not in app._clipboard
+
+    _run(scenario())
+
+
 def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> None:
     fake = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
 

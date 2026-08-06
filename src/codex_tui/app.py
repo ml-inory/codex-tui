@@ -23,6 +23,7 @@ from codex_tui.sessions import (
     Session,
     SessionStore,
     generate_title,
+    is_injected_message,
 )
 from codex_tui.streaming import InteractiveCodexRunner
 from codex_tui.widgets import ChatLog, ChatView, Sidebar
@@ -59,6 +60,13 @@ class CodexTuiApp(App[None]):
             show=True,
         ),
         Binding("ctrl+g", "jump_finished", "Finished", show=True),
+        Binding("ctrl+y", "copy_last_reply", "Copy reply", show=True),
+        Binding(
+            "ctrl+shift+y",
+            "copy_conversation",
+            "Copy chat",
+            show=True,
+        ),
         Binding("escape", "interrupt_turn", "Interrupt", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -503,6 +511,43 @@ class CodexTuiApp(App[None]):
             self.run_worker(
                 self._project_selected(session.project, select_id=session.id)
             )
+
+    def action_copy_last_reply(self) -> None:
+        """Copy the current session's most recent Codex reply."""
+        if self.current_session is None:
+            self.notify("没有选中会话", severity="warning")
+            return
+        text = next(
+            (
+                message.content
+                for message in reversed(self.current_session.messages)
+                if message.role == "assistant"
+            ),
+            None,
+        )
+        if not text:
+            self.notify("当前会话还没有 Codex 回复", severity="warning")
+            return
+        self.copy_to_clipboard(text)
+        self.notify("已复制最后一条回复", timeout=3)
+
+    def action_copy_conversation(self) -> None:
+        """Copy the whole conversation as readable text."""
+        if self.current_session is None:
+            self.notify("没有选中会话", severity="warning")
+            return
+        parts: list[str] = []
+        for message in self.current_session.messages:
+            if message.role == "user" and is_injected_message(message.content):
+                continue
+            label = "You" if message.role == "user" else "Codex"
+            parts.append(f"## {label}\n\n{message.content}")
+        text = "\n\n---\n\n".join(parts)
+        if not text.strip():
+            self.notify("会话还没有内容", severity="warning")
+            return
+        self.copy_to_clipboard(text)
+        self.notify(f"已复制整个会话（{len(parts)} 条消息）", timeout=3)
 
     @on(Input.Submitted, "#prompt-input")
     def _on_prompt_submitted(self, event: Input.Submitted) -> None:

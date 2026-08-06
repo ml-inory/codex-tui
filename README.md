@@ -23,6 +23,9 @@ conversation and a prompt input.
   appears, its title gets a `●` marker in the sidebar, and `Ctrl+G` jumps
   straight to the most recently finished session
 - `Esc` interrupts the model mid-reply
+- Mouse-drag to select chat text and `Ctrl+C` to copy it (OSC 52 clipboard,
+  works over SSH in MobaXTerm / Windows Terminal); `Ctrl+Y` copies the last
+  Codex reply and `Ctrl+Shift+Y` copies the whole conversation
 - Delete sessions (moved to `~/.codex-tui/trash`, recoverable)
 - Configurable sandbox so Codex can actually edit project files
 
@@ -69,6 +72,8 @@ Options:
 | `Ctrl+O` | Quick-switch to any session (type to filter, Enter to open) |
 | `Ctrl+Up` / `Ctrl+Down` (or `Alt+Up` / `Alt+Down`) | Cycle through sessions of the current project |
 | `Ctrl+G` | Jump to the most recently finished background session |
+| `Ctrl+Y` | Copy the current session's last Codex reply |
+| `Ctrl+Shift+Y` | Copy the whole current conversation (injected context excluded) |
 | `Esc` | Interrupt the running turn |
 | `q` | Quit (confirm with `Ctrl+Q`) |
 
