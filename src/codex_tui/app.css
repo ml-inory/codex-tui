@@ -81,6 +81,12 @@ Screen {
     padding-bottom: 1;
 }
 
+.earlier-hint {
+    color: $text-muted;
+    text-style: italic;
+    padding: 0 1;
+}
+
 #rename-dialog {
     width: 60;
     height: auto;

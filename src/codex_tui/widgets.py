@@ -12,7 +12,10 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, ListItem, ListView, Markdown, Static
 
-from codex_tui.sessions import Session, is_injected_message
+from codex_tui.sessions import Message, Session, is_injected_message
+
+
+DEFAULT_WINDOW = 80
 
 
 class Sidebar(Widget):
@@ -101,18 +104,56 @@ class ChatLog(VerticalScroll):
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self._pending_markdown: Markdown | None = None
+        self._messages: list[Message] = []
+        self._window = DEFAULT_WINDOW
 
     async def render_session(self, session: Session) -> None:
+        self._messages = [
+            message
+            for message in session.messages
+            if not (message.role == "user" and is_injected_message(message.content))
+        ]
+        self._window = DEFAULT_WINDOW
+        await self._render_window()
+
+    async def _render_window(self) -> None:
         await self.clear_chat()
+        start = max(0, len(self._messages) - self._window)
         rows: list[Widget] = []
-        for message in session.messages:
-            if message.role == "user" and is_injected_message(message.content):
-                continue
+        if start > 0:
+            rows.append(
+                Static(
+                    f"[dim]▲ {start} 条更早消息 · 按 F7 加载[/]",
+                    id="earlier-hint",
+                    classes="earlier-hint",
+                )
+            )
+        for message in self._messages[start:]:
             rows.append(self._build_row(message.role, message.content))
         if rows:
             await self.mount(*rows)
             self.refresh(layout=True)
         self.scroll_end(animate=False)
+
+    async def load_earlier(self) -> bool:
+        """Expand the visible window upward; returns True if more was loaded."""
+        if len(self._messages) <= self._window:
+            return False
+        old_start = max(0, len(self._messages) - self._window)
+        self._window += DEFAULT_WINDOW
+        await self._render_window()
+        new_start = max(0, len(self._messages) - self._window)
+        offset = old_start - new_start
+        widgets = [
+            child
+            for child in self.children
+            if not (isinstance(child, Static) and child.id == "earlier-hint")
+        ]
+        if 0 <= offset < len(widgets):
+            self.scroll_to_widget(widgets[offset], animate=False)
+        else:
+            self.scroll_end(animate=False)
+        return True
 
     async def clear_chat(self) -> None:
         await self.remove_children(self.children)

@@ -23,7 +23,7 @@ from codex_tui.sessions import (
     SessionStore,
     generate_title,
 )
-from codex_tui.widgets import ChatView, Sidebar
+from codex_tui.widgets import ChatLog, ChatView, Sidebar
 
 
 class CodexTuiApp(App[None]):
@@ -42,6 +42,7 @@ class CodexTuiApp(App[None]):
         Binding("ctrl+r", "rename_session", "Rename", show=True),
         Binding("f3", "pick_model", "Model", show=True),
         Binding("f5", "refresh_sessions", "Refresh", show=True),
+        Binding("f7", "load_earlier", "Earlier", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -142,6 +143,13 @@ class CodexTuiApp(App[None]):
                 self.notify(f"Model {model_slug} will apply to the new session")
 
         self.push_screen(ModelScreen(self.models, current), on_pick)
+
+    async def action_load_earlier(self) -> None:
+        if self.turn_active:
+            return
+        loaded = await self.query_one(ChatLog).load_earlier()
+        if not loaded:
+            self.notify("Already at the beginning", severity="warning")
 
     def action_delete_session(self) -> None:
         if self.turn_active:

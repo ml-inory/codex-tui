@@ -10,6 +10,7 @@ from codex_tui.runner import CodexRunError
 from codex_tui.screens import ModelScreen, RenameScreen
 from codex_tui.widgets import ChatView, Sidebar
 from tests.helpers import make_session_file
+from tests.helpers import make_many_message_session
 
 
 def _run(coro):
@@ -503,6 +504,26 @@ def test_run_cli_clean_trash(tmp_path: Path, monkeypatch, capsys) -> None:
     assert code == 0
     assert list(trash.iterdir()) == []
     assert "Removed 1" in capsys.readouterr().out
+
+
+def test_long_chat_is_windowed_and_f7_loads_earlier(tmp_path: Path) -> None:
+    make_many_message_session(tmp_path, n=120)
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            chat = app.query_one("#chat-log")
+            rendered = " ".join(str(s.content or "") for s in chat.query(Static))
+            assert "回答119" in rendered  # newest message visible
+            assert "问题0" not in rendered  # oldest windowed out
+
+            await pilot.press("f7")
+            await pilot.pause()
+            rendered = " ".join(str(s.content or "") for s in chat.query(Static))
+            assert "问题0" in rendered
+
+    _run(scenario())
 
 
 def test_backfill_titles_for_injected_context_sessions(tmp_path: Path) -> None:

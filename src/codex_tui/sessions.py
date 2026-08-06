@@ -177,6 +177,8 @@ class SessionStore:
     ) -> None:
         self.sessions_dir = sessions_dir or _codex_home() / "sessions"
         self.trash_dir = trash_dir or _codex_tui_home() / "trash"
+        # Parsed sessions keyed by (mtime_ns, size) so repeated scans stay cheap.
+        self._cache: dict[str, tuple[tuple[int, int], Session]] = {}
 
     def list_sessions(self) -> list[Session]:
         """All sessions, newest first."""
@@ -186,11 +188,26 @@ class SessionStore:
         for path in sorted(self.sessions_dir.rglob("*.jsonl")):
             if path.is_relative_to(self.trash_dir):
                 continue
-            session = parse_session_file(path)
+            session = self._cached_session(path)
             if session.id:
                 sessions.append(session)
         sessions.sort(key=lambda s: s.timestamp, reverse=True)
         return sessions
+
+    def _cached_session(self, path: Path) -> Session:
+        """Parse only when the file changed since the last scan."""
+        try:
+            stat = path.stat()
+            key = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            self._cache.pop(str(path), None)
+            return Session(id="", path=path)
+        cached = self._cache.get(str(path))
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        session = parse_session_file(path)
+        self._cache[str(path)] = (key, session)
+        return session
 
     def list_projects(self) -> list[str]:
         """Distinct project directories, ordered by most recent session first."""
@@ -214,6 +231,7 @@ class SessionStore:
         self.trash_dir.mkdir(parents=True, exist_ok=True)
         destination = self.trash_dir / f"{session.id}-{session.path.name}"
         shutil.move(str(session.path), str(destination))
+        self._cache.pop(str(session.path), None)
 
     def clean_trash(self) -> int:
         """Permanently delete trashed transcripts; return the number removed."""

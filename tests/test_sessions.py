@@ -105,6 +105,26 @@ def test_clean_trash_missing_dir_returns_zero(tmp_path: Path) -> None:
     assert store.clean_trash() == 0
 
 
+def test_store_reparses_only_changed_files(tmp_path: Path) -> None:
+    from tests.helpers import make_session_file
+
+    path = make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="first version",
+    )
+    store = SessionStore(tmp_path)
+    assert store.list_sessions()[0].messages[0].content == "first version"
+
+    # Same file, new content: the cache must notice and re-parse.
+    content = path.read_text(encoding="utf-8")
+    path.write_text(
+        content.replace("first version", "second version"), encoding="utf-8"
+    )
+    assert store.list_sessions()[0].messages[0].content == "second version"
+
+
 def test_is_injected_message_detects_system_context() -> None:
     assert is_injected_message("<environment_context>\n  <cwd>/tmp</cwd>")
     assert is_injected_message("<turn_aborted>\nThe user interrupted the turn")

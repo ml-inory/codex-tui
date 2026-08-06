@@ -54,6 +54,7 @@ Options:
 | `Ctrl+R` | Rename the current session |
 | `F3` | Pick the model for the session (from `~/.codex/models.json`) |
 | `F5` | Refresh projects / sessions |
+| `F7` | Load earlier messages of the current conversation |
 | `q` | Quit (confirm with `Ctrl+Q`) |
 
 Session titles and model choices are stored in `~/.codex-tui/overrides.json`;
