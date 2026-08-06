@@ -693,6 +693,40 @@ def test_sidebar_project_and_session_selection_events(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_agents_md_injection_hidden_from_chat_and_title(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="# AGENTS.md instructions for /proj/a\n\n<INSTRUCTIONS>\n说明",
+        assistant_text="你好",
+        extra_events=[
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "真实问题"}],
+                },
+            }
+        ],
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.title == "真实问题"
+            statics = list(app.query_one("#chat-log").query(Static))
+            rendered = " ".join(str(s.content or "") for s in statics)
+            assert "AGENTS.md" not in rendered
+            assert "真实问题" in rendered
+            assert "你好" in rendered
+
+    _run(scenario())
+
+
 def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> None:
     fake = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
 
