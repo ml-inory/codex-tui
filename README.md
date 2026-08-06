@@ -1,5 +1,7 @@
 # codex-tui
 
+[English](README.md) · [中文](README.zh-CN.md)
+
 A Codex Desktop-like terminal UI built with [Textual](https://textual.textualize.io/),
 backed by the locally installed `codex` CLI. The left sidebar manages projects
 (working directories) and sessions; the right panel shows the selected
