@@ -7,14 +7,14 @@ Screen {
     min-width: 22;
     max-width: 32;
     height: 1fr;
-    background: $surface;
-    border-right: solid $accent-darken-2;
+    background: #1E1E1E;
+    border-right: solid #CF7E00;
     padding: 0 1 1 1;
 }
 
 .section-title {
     text-style: bold;
-    color: $text-muted;
+    color: #8E8E8E;
     margin-top: 1;
     margin-bottom: 1;
 }
@@ -22,7 +22,7 @@ Screen {
 #project-list,
 #session-list {
     height: 40%;
-    border: round $primary-darken-1;
+    border: round #0065BE;
 }
 
 #session-list {
@@ -37,11 +37,11 @@ Screen {
 }
 
 .session-label.finished {
-    color: $accent;
+    color: #FEA62B;
 }
 
 #sidebar-hint {
-    color: $text-muted;
+    color: #8E8E8E;
     margin-top: 1;
 }
 
@@ -63,35 +63,35 @@ Screen {
     height: 1fr;
     layout: vertical;
     padding: 0 1;
-    border-left: solid $primary-darken-1;
+    border-left: solid #0065BE;
 }
 
 .watch-header {
     height: auto;
     padding: 0 1;
-    color: $text-muted;
+    color: #8E8E8E;
     content-align: left middle;
-    border-bottom: solid $primary-darken-1;
+    border-bottom: solid #0065BE;
 }
 
 .watch-status {
     height: auto;
     padding: 0 1;
-    color: $warning;
+    color: #FEA62B;
 }
 
 #chat-header {
     height: auto;
     padding: 0 1;
-    color: $text-muted;
+    color: #8E8E8E;
     content-align: left middle;
-    border-bottom: solid $primary-darken-1;
+    border-bottom: solid #0065BE;
 }
 
 #chat-status {
     height: auto;
     padding: 0 1;
-    color: $warning;
+    color: #FEA62B;
 }
 
 #chat-log {
@@ -106,7 +106,7 @@ Screen {
 }
 
 .bubble.user {
-    background: $panel;
+    background: #242F38;
     padding: 0 1 1 1;
 }
 
@@ -120,7 +120,7 @@ Screen {
 }
 
 .earlier-hint {
-    color: $text-muted;
+    color: #8E8E8E;
     text-style: italic;
     padding: 0 1;
 }
@@ -128,8 +128,8 @@ Screen {
 #rename-dialog {
     width: 60;
     height: auto;
-    border: thick $accent;
-    background: $surface;
+    border: thick #FEA62B;
+    background: #1E1E1E;
     padding: 1 2;
     layout: vertical;
 }
@@ -137,22 +137,22 @@ Screen {
 #model-dialog {
     width: 60;
     height: auto;
-    border: thick $accent;
-    background: $surface;
+    border: thick #FEA62B;
+    background: #1E1E1E;
     padding: 1 2;
     layout: vertical;
 }
 
 #model-list {
     height: 8;
-    border: round $primary-darken-1;
+    border: round #0065BE;
 }
 
 #quick-switch-dialog {
     width: 80;
     height: auto;
-    border: thick $accent;
-    background: $surface;
+    border: thick #FEA62B;
+    background: #1E1E1E;
     padding: 1 2;
     layout: vertical;
 }
@@ -163,14 +163,14 @@ Screen {
 
 #quick-switch-list {
     height: 12;
-    border: round $primary-darken-1;
+    border: round #0065BE;
 }
 
 #key-help-dialog {
     width: 80;
     height: 70%;
-    border: thick $accent;
-    background: $surface;
+    border: thick #FEA62B;
+    background: #1E1E1E;
     padding: 1 2;
     layout: vertical;
 }
@@ -181,7 +181,7 @@ Screen {
 
 #key-help-list {
     height: 1fr;
-    border: round $primary-darken-1;
+    border: round #0065BE;
 }
 
 .model-label {
