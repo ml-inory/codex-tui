@@ -7,6 +7,7 @@ from textual.widgets import Input, ListView, Markdown, Static
 
 from codex_tui.app import CodexTuiApp
 from codex_tui.runner import CodexRunError
+from codex_tui.screens import ModelScreen, RenameScreen
 from codex_tui.widgets import ChatView, Sidebar
 from tests.helpers import make_session_file
 
@@ -34,9 +35,21 @@ class FakeCodex:
         self.error: str | None = None
         self._release: asyncio.Event | None = None
 
-    async def run_turn(self, *, project: str, prompt: str, session_id: str | None = None):
+    async def run_turn(
+        self,
+        *,
+        project: str,
+        prompt: str,
+        session_id: str | None = None,
+        model: str | None = None,
+    ):
         self.calls.append(
-            {"project": project, "prompt": prompt, "session_id": session_id}
+            {
+                "project": project,
+                "prompt": prompt,
+                "session_id": session_id,
+                "model": model,
+            }
         )
         if self.error:
             raise CodexRunError(self.error)
@@ -302,6 +315,179 @@ def test_rename_persists_across_app_instances(tmp_path: Path) -> None:
             await pilot.pause()
             assert second.current_session is not None
             assert second.current_session.title == "Persistent Name"
+
+    _run(scenario())
+
+
+def test_ctrl_bindings_work_while_input_focused(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="hi",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.focused is app.query_one("#prompt-input", Input)
+
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            assert isinstance(app.screen, RenameScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            assert app.current_session is None
+
+    _run(scenario())
+
+
+def test_model_picker_sets_override_for_session(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="hi",
+    )
+    catalog = tmp_path / "models.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {"slug": "model-a", "display_name": "Model A"},
+                    {"slug": "model-b", "display_name": "Model B"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    overrides_path = tmp_path / "overrides.json"
+    fake = FakeCodex(tmp_path, session_id="11111111-1111-1111-1111-111111111111")
+
+    async def scenario() -> None:
+        app = CodexTuiApp(
+            sessions_dir=tmp_path,
+            overrides_path=overrides_path,
+            model_catalog_path=catalog,
+            runner=fake,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("f3")
+            await pilot.pause()
+            model_list = app.screen.query_one("#model-list", ListView)
+            assert len(model_list.children) == 2
+
+            await pilot.press("down", "down", "enter")
+            await pilot.pause()
+            assert await _wait_until(
+                pilot,
+                lambda: app.current_session is not None
+                and app.current_session.effective_model == "model-b",
+            )
+            header = app.query_one("#chat-header", Static)
+            assert "model-b" in str(header.content)
+
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            await pilot.pause()
+            prompt_input.value = "go"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            assert fake.calls[0]["model"] == "model-b"
+
+    _run(scenario())
+
+
+def test_model_picker_applies_to_new_session(tmp_path: Path) -> None:
+    catalog = tmp_path / "models.json"
+    catalog.write_text(
+        json.dumps({"models": [{"slug": "model-new", "display_name": "New Model"}]}),
+        encoding="utf-8",
+    )
+    overrides_path = tmp_path / "overrides.json"
+    fake = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
+
+    async def scenario() -> None:
+        app = CodexTuiApp(
+            sessions_dir=tmp_path,
+            overrides_path=overrides_path,
+            model_catalog_path=catalog,
+            runner=fake,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.current_session is None
+
+            await pilot.press("f3")
+            await pilot.pause()
+            model_list = app.screen.query_one("#model-list", ListView)
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.pending_model == "model-new"
+
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            await pilot.pause()
+            prompt_input.value = "start"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+
+            assert fake.calls[0]["model"] == "model-new"
+            assert fake.calls[0]["session_id"] is None
+            data = json.loads(overrides_path.read_text(encoding="utf-8"))
+            assert data["99999999-9999-9999-9999-999999999999"]["model"] == "model-new"
+
+    _run(scenario())
+
+
+def test_model_clear_removes_override(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="hi",
+    )
+    catalog = tmp_path / "models.json"
+    catalog.write_text(
+        json.dumps({"models": [{"slug": "model-a", "display_name": "Model A"}]}),
+        encoding="utf-8",
+    )
+    overrides_path = tmp_path / "overrides.json"
+    overrides_path.write_text(
+        json.dumps({"11111111-1111-1111-1111-111111111111": {"model": "model-a"}}),
+        encoding="utf-8",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(
+            sessions_dir=tmp_path,
+            overrides_path=overrides_path,
+            model_catalog_path=catalog,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.current_session is not None
+            assert app.current_session.effective_model == "model-a"
+
+            await pilot.press("f3")
+            await pilot.pause()
+            assert await _wait_until(pilot, lambda: isinstance(app.screen, ModelScreen))
+            await pilot.click("#model-clear")
+            await pilot.pause()
+
+            assert await _wait_until(
+                pilot,
+                lambda: app.current_session is not None
+                and app.current_session.model_override is None,
+            )
+            data = json.loads(overrides_path.read_text(encoding="utf-8"))
+            assert "model" not in data["11111111-1111-1111-1111-111111111111"]
 
     _run(scenario())
 

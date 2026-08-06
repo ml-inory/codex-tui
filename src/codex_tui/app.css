@@ -108,6 +108,26 @@ Screen {
     layout: vertical;
 }
 
+#model-dialog {
+    width: 60;
+    height: auto;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#model-list {
+    height: 8;
+    border: round $primary-darken-1;
+}
+
+.model-label {
+    width: 100%;
+    overflow: hidden;
+    padding: 0 1;
+}
+
 .dialog-title {
     text-style: bold;
     margin-bottom: 1;

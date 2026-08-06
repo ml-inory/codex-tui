@@ -62,6 +62,13 @@ class Overrides:
         self.data.setdefault(session_id, {})[key] = value
         self.save()
 
+    def delete(self, session_id: str, key: str) -> None:
+        """Remove one override key (e.g. clearing a model choice)."""
+        entry = self.data.get(session_id)
+        if entry is not None and key in entry:
+            del entry[key]
+            self.save()
+
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".json.tmp")

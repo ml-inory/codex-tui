@@ -6,7 +6,9 @@ from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Input, ListItem, ListView, Static
+
+from codex_tui.models import ModelEntry
 
 
 class RenameScreen(ModalScreen[str | None]):
@@ -45,5 +47,60 @@ class RenameScreen(ModalScreen[str | None]):
         self.dismiss(self.query_one("#rename-input", Input).value.strip())
 
     @on(Button.Pressed, "#rename-cancel")
+    def _on_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class ModelScreen(ModalScreen[str | None]):
+    """Pick a model from the codex catalog."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+    CLEAR = ""
+
+    def __init__(
+        self,
+        models: list[ModelEntry],
+        current: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.models = models
+        self.current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="model-dialog"):
+            yield Static("Select model", classes="dialog-title")
+            yield ListView(id="model-list")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Clear (use default)", id="model-clear")
+                yield Button("Cancel", id="model-cancel")
+
+    async def on_mount(self) -> None:
+        model_list = self.query_one("#model-list", ListView)
+        for index, entry in enumerate(self.models):
+            label = (
+                entry.display_name
+                if entry.display_name != entry.slug
+                else entry.slug
+            )
+            await model_list.append(ListItem(Static(label, classes="model-label")))
+        # Note: index is intentionally left unset so mounting does not fire
+        # ListView.Selected (which would dismiss the modal immediately).
+        model_list.focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(ListView.Selected, "#model-list")
+    def _on_selected(self, event: ListView.Selected) -> None:
+        index = event.list_view.index
+        if index is None or index >= len(self.models):
+            return
+        self.dismiss(self.models[index].slug)
+
+    @on(Button.Pressed, "#model-clear")
+    def _on_clear(self) -> None:
+        self.dismiss(self.CLEAR)
+
+    @on(Button.Pressed, "#model-cancel")
     def _on_cancel(self) -> None:
         self.dismiss(None)

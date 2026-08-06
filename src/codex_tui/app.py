@@ -13,8 +13,9 @@ from textual.binding import Binding
 from textual.widgets import Footer, Input
 
 from codex_tui.overrides import Overrides
+from codex_tui.models import load_model_catalog
 from codex_tui.runner import CodexRunner, CodexRunError
-from codex_tui.screens import RenameScreen
+from codex_tui.screens import ModelScreen, RenameScreen
 from codex_tui.sessions import Session, SessionStore
 from codex_tui.widgets import ChatView, Sidebar
 
@@ -28,10 +29,13 @@ class CodexTuiApp(App[None]):
     BINDINGS = [
         Binding("tab", "focus_next", "Next pane", show=True),
         Binding("shift+tab", "focus_previous", "Prev pane", show=True),
+        # Ctrl/function keys so the actions work while the prompt input has
+        # focus (single letters would be typed into the input instead).
+        Binding("ctrl+n", "new_session", "New session", show=True),
+        Binding("ctrl+d", "delete_session", "Delete session", show=True),
         Binding("ctrl+r", "rename_session", "Rename", show=True),
-        Binding("n", "new_session", "New session", show=True),
-        Binding("d", "delete_session", "Delete session", show=True),
-        Binding("r", "refresh_sessions", "Refresh", show=True),
+        Binding("f3", "pick_model", "Model", show=True),
+        Binding("f5", "refresh_sessions", "Refresh", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -41,10 +45,12 @@ class CodexTuiApp(App[None]):
         runner: CodexRunner | None = None,
         trash_dir: Path | None = None,
         overrides_path: Path | None = None,
+        model_catalog_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.store = SessionStore(sessions_dir, trash_dir)
         self.overrides = Overrides.load(overrides_path)
+        self.models = load_model_catalog(model_catalog_path)
         self.runner = runner or CodexRunner(
             sandbox=os.environ.get("CODEX_TUI_SANDBOX", "workspace-write")
         )
@@ -52,6 +58,7 @@ class CodexTuiApp(App[None]):
         self.current_project: str | None = None
         # Named to avoid Textual's internal `_running` app flag.
         self.turn_active = False
+        self.pending_model: str | None = None
         self._pending_delete: Session | None = None
         self._pending_delete_at = 0.0
 
@@ -71,6 +78,38 @@ class CodexTuiApp(App[None]):
         self._pending_delete = None
         await self.query_one(ChatView).show_new_session(self.current_project)
         self.set_focus(self.query_one(Input))
+
+    def action_pick_model(self) -> None:
+        if self.turn_active:
+            return
+        if not self.models:
+            self.notify("No models found in catalog", severity="warning")
+            return
+        current = (
+            self.current_session.effective_model
+            if self.current_session is not None
+            else self.pending_model
+        )
+
+        def on_pick(model_slug: str | None) -> None:
+            if model_slug == ModelScreen.CLEAR:
+                if self.current_session is not None:
+                    self.overrides.delete(self.current_session.id, "model")
+                    self.run_worker(self.refresh_sessions())
+                else:
+                    self.pending_model = None
+                self.notify("Using default model")
+                return
+            if model_slug is None:
+                return
+            if self.current_session is not None:
+                self.overrides.set(self.current_session.id, "model", model_slug)
+                self.run_worker(self.refresh_sessions())
+            else:
+                self.pending_model = model_slug
+                self.notify(f"Model {model_slug} will apply to the new session")
+
+        self.push_screen(ModelScreen(self.models, current), on_pick)
 
     def action_delete_session(self) -> None:
         if self.turn_active:
@@ -178,14 +217,23 @@ class CodexTuiApp(App[None]):
         session_id = None
         if self.current_session is not None and self.current_session.project == project:
             session_id = self.current_session.id
+        model = (
+            self.current_session.effective_model
+            if session_id and self.current_session is not None
+            else self.pending_model
+        )
 
         error: str | None = None
+        thread_id: str | None = None
         try:
             async for event in self.runner.run_turn(
                 project=project,
                 prompt=prompt,
                 session_id=session_id,
+                model=model,
             ):
+                if event.get("type") == "thread.started":
+                    thread_id = str(event.get("thread_id") or "")
                 if event.get("type") != "item.completed":
                     continue
                 item = event.get("item") or {}
@@ -195,6 +243,13 @@ class CodexTuiApp(App[None]):
             error = str(exc)
         finally:
             self.turn_active = False
+            if (
+                session_id is None
+                and thread_id
+                and self.pending_model is not None
+            ):
+                self.overrides.set(thread_id, "model", self.pending_model)
+                self.pending_model = None
             await chat.finish_assistant()
             await chat.set_running(False)
             await self.refresh_sessions()

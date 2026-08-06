@@ -48,10 +48,16 @@ Options:
 | --- | --- |
 | `Tab` / `Shift+Tab` | Move between sidebar and prompt |
 | `Enter` | Send the prompt (new session if none is open, otherwise resume) |
-| `n` | New session |
-| `d` | Delete the current session (press again to confirm) |
-| `r` | Refresh projects / sessions |
+| `Ctrl+N` | New session |
+| `Ctrl+D` | Delete the current session (press again to confirm) |
+| `Ctrl+R` | Rename the current session |
+| `F3` | Pick the model for the session (from `~/.codex/models.json`) |
+| `F5` | Refresh projects / sessions |
 | `q` | Quit (confirm with `Ctrl+Q`) |
+
+Session titles and model choices are stored in `~/.codex-tui/overrides.json`;
+the codex session files themselves are never modified. Deleted sessions are
+moved to `~/.codex-tui/trash` instead of being erased.
 
 ## How it works
 

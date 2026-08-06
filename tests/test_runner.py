@@ -44,3 +44,17 @@ def test_sandbox_flag_added_for_new_and_resume() -> None:
         "/proj/a", "hi", session_id="abc-123", sandbox="read-only"
     )
     assert resume_command[resume_command.index("-s") + 1] == "read-only"
+
+
+def test_model_flag_added_for_new_and_resume() -> None:
+    new_command = build_codex_command("/proj/a", "hi", model="deepseek-v4-pro")
+    assert new_command[new_command.index("-m") + 1] == "deepseek-v4-pro"
+
+    resume_command = build_codex_command(
+        "/proj/a",
+        "hi",
+        session_id="abc-123",
+        model="model-b",
+        sandbox="read-only",
+    )
+    assert resume_command[resume_command.index("-m") + 1] == "model-b"

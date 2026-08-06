@@ -171,10 +171,11 @@ class ChatView(Widget):
         header.update(f"{session.project}  |  {session.title}  |  {model}")
         await chat_log.render_session(session)
 
-    async def show_new_session(self, project: str | None) -> None:
+    async def show_new_session(self, project: str | None, model: str | None = None) -> None:
         """Show the empty state for a brand-new conversation."""
+        suffix = f" (model: {model})" if model else ""
         self.query_one("#chat-header", Static).update(
-            f"New session{' in ' + project if project else ''} — type a message to start"
+            f"New session{' in ' + project if project else ''} — type a message to start{suffix}"
         )
         self.query_one("#chat-status", Static).update("")
         await self.query_one(ChatLog).clear_chat()
