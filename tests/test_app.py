@@ -930,6 +930,37 @@ def test_single_delete_press_does_not_delete(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_delete_session_via_ctrl_d_twice(tmp_path: Path) -> None:
+    make_session_file(
+        tmp_path,
+        session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/proj/a",
+        user_text="to be deleted",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, trash_dir=tmp_path / "trash")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Focus outside the input so Ctrl+D reaches the app binding
+            # (inside the input Ctrl+D deletes a character).
+            app.query_one("#session-list", ListView).focus()
+            await pilot.pause()
+
+            await pilot.press("ctrl+d")
+            await pilot.pause()
+            assert app._pending_delete is not None
+            assert len(list((tmp_path / "2026").rglob("*.jsonl"))) == 1
+
+            await pilot.press("ctrl+d")
+            assert await _wait_until(
+                pilot, lambda: not list((tmp_path / "2026").rglob("*.jsonl"))
+            )
+            assert len(list((tmp_path / "trash").rglob("*.jsonl"))) == 1
+
+    _run(scenario())
+
+
 def test_rename_session_via_modal_updates_ui_and_persists(tmp_path: Path) -> None:
     make_session_file(
         tmp_path,

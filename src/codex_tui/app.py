@@ -264,7 +264,7 @@ class CodexTuiApp(App[None]):
             self._pending_delete = self.current_session
             self._pending_delete_at = now
             self.notify(
-                f"Press d again to delete '{self.current_session.title[:40]}'",
+                f"再按一次 Ctrl+D 确认删除：{self.current_session.title[:40]}",
                 severity="warning",
                 timeout=4,
             )
@@ -273,7 +273,7 @@ class CodexTuiApp(App[None]):
         self._pending_delete = None
         assert target is not None
         self.store.delete_session(target)
-        self.notify("Session deleted")
+        self.notify("会话已删除")
         self.run_worker(self.refresh_sessions())
 
     async def action_refresh_sessions(self) -> None:

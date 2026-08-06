@@ -73,7 +73,7 @@ Options:
 | `Tab` / `Shift+Tab` | Move between sidebar and prompt |
 | `Enter` | Send the prompt (new session if none is open, otherwise resume) |
 | `Ctrl+N` | New session |
-| `Ctrl+D` | Delete the current session (press again to confirm) |
+| `Ctrl+D` | Delete the current session (press Ctrl+D again to confirm) |
 | `Ctrl+R` | Rename the current session |
 | `F1` | Open the keyboard shortcut reference (type to filter) |
 | `F2` | Toggle project path display (deepest dir ↔ full path) |
