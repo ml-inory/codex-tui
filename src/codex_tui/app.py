@@ -17,7 +17,12 @@ from textual.widgets import Footer, Input, ListView
 from codex_tui.overrides import Overrides
 from codex_tui.models import load_model_catalog
 from codex_tui.runner import CodexRunner, CodexRunError
-from codex_tui.screens import ModelScreen, QuickSwitchScreen, RenameScreen
+from codex_tui.screens import (
+    KeyHelpScreen,
+    ModelScreen,
+    QuickSwitchScreen,
+    RenameScreen,
+)
 from codex_tui.sessions import (
     INJECTED_PREFIXES,
     Session,
@@ -25,6 +30,7 @@ from codex_tui.sessions import (
     generate_title,
     is_injected_message,
 )
+from codex_tui.settings import AppSettings
 from codex_tui.streaming import InteractiveCodexRunner
 from codex_tui.widgets import ChatLog, ChatView, Sidebar
 
@@ -43,6 +49,8 @@ class CodexTuiApp(App[None]):
         Binding("ctrl+n", "new_session", "New session", show=True),
         Binding("ctrl+d", "delete_session", "Delete session", show=True),
         Binding("ctrl+r", "rename_session", "Rename", show=True),
+        Binding("f1", "show_key_help", "Keys", show=True),
+        Binding("f2", "toggle_project_path", "Path", show=True),
         Binding("f3", "pick_model", "Model", show=True),
         Binding("f5", "refresh_sessions", "Refresh", show=True),
         Binding("f7", "load_earlier", "Earlier", show=True),
@@ -79,6 +87,7 @@ class CodexTuiApp(App[None]):
         overrides_path: Path | None = None,
         model_catalog_path: Path | None = None,
         fallback_runner: CodexRunner | None = None,
+        settings_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.store = SessionStore(sessions_dir, trash_dir)
@@ -88,6 +97,7 @@ class CodexTuiApp(App[None]):
             sandbox=os.environ.get("CODEX_TUI_SANDBOX", "workspace-write")
         )
         self.fallback_runner = fallback_runner
+        self.settings = AppSettings.load(settings_path)
         self.current_session: Session | None = None
         self.current_project: str | None = None
         self._project_sessions: list[Session] = []
@@ -267,7 +277,7 @@ class CodexTuiApp(App[None]):
     async def _refresh_sessions_locked(self) -> None:
         projects = self.store.list_projects()
         sidebar = self.query_one(Sidebar)
-        await sidebar.set_projects(projects)
+        await sidebar.set_projects(projects, self.settings.project_mode)
         if not projects:
             self.current_project = None
             self.current_session = None
@@ -454,6 +464,41 @@ class CodexTuiApp(App[None]):
             self.notify("No sessions yet", severity="warning")
             return
         self.push_screen(QuickSwitchScreen(sessions), self._on_quick_switch)
+
+    def action_show_key_help(self) -> None:
+        """Open the searchable keyboard shortcut reference."""
+        bindings = [
+            (binding.key, binding.action, binding.description or "")
+            for binding in type(self).BINDINGS
+        ]
+        self.push_screen(KeyHelpScreen(bindings))
+
+    def action_toggle_project_path(self) -> None:
+        """Switch project labels between deepest dir and full path."""
+        self.settings.project_mode = (
+            "full" if self.settings.project_mode == "short" else "short"
+        )
+        self.settings.save()
+        label = (
+            "完整路径"
+            if self.settings.project_mode == "full"
+            else "最深层目录"
+        )
+        self.notify(f"项目路径显示：{label}", timeout=3)
+        self.run_worker(self._apply_project_mode())
+
+    async def _apply_project_mode(self) -> None:
+        async with self._view_lock:
+            await self._rerender_sidebar_locked()
+
+    async def _rerender_sidebar_locked(self) -> None:
+        """Redraw project and session lists without reopening the chat."""
+        sidebar = self.query_one(Sidebar)
+        await sidebar.set_projects(
+            self.store.list_projects(), self.settings.project_mode
+        )
+        if self.current_project is not None:
+            await self._rerender_session_list_locked()
 
     def _on_quick_switch(self, session: Session | None) -> None:
         if session is None:

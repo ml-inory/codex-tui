@@ -8,7 +8,10 @@ conversation and a prompt input.
 ## Features
 
 - Sidebar with project list and per-project session list (read from
-  `$CODEX_HOME/sessions`, e.g. `~/.codex/sessions`)
+  `$CODEX_HOME/sessions`, e.g. `~/.codex/sessions`); projects show their
+  deepest directory by default, `F2` toggles the full path (remembered)
+- `F1` opens a searchable keyboard shortcut reference, so the footer never
+  needs to fit everything
 - Markdown-rendered conversations (user messages as bubbles, assistant replies
   as markdown)
 - Start a new session or resume an existing one; replies stream in
@@ -66,6 +69,8 @@ Options:
 | `Ctrl+N` | New session |
 | `Ctrl+D` | Delete the current session (press again to confirm) |
 | `Ctrl+R` | Rename the current session |
+| `F1` | Open the keyboard shortcut reference (type to filter) |
+| `F2` | Toggle project path display (deepest dir ↔ full path) |
 | `F3` | Pick the model for the session (from `~/.codex/models.json`) |
 | `F5` | Refresh projects / sessions |
 | `F7` | Load earlier messages of the current conversation |
