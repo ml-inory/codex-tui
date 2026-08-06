@@ -11,8 +11,10 @@ conversation and a prompt input.
   `$CODEX_HOME/sessions`, e.g. `~/.codex/sessions`)
 - Markdown-rendered conversations (user messages as bubbles, assistant replies
   as markdown)
-- Start a new session or resume an existing one; replies stream in as the CLI
-  completes each turn
+- Start a new session or resume an existing one; replies stream in
+  token-by-token through a persistent `codex app-server` connection (the same
+  protocol Codex Desktop uses), so it feels like the native CLI
+- `Esc` interrupts the model mid-reply
 - Delete sessions (moved to `~/.codex-tui/trash`, recoverable)
 - Configurable sandbox so Codex can actually edit project files
 
@@ -40,6 +42,7 @@ Options:
 | --- | --- |
 | `--sandbox read-only\|workspace-write\|danger-full-access` | Sandbox passed to `codex exec`; default `workspace-write` (edits allowed inside the selected project). Overridable via `CODEX_TUI_SANDBOX`. |
 | `--codex-bin PATH` | Path to the codex binary (default: `codex`). |
+| `--mode auto\|interactive\|exec` | Turn backend: `interactive` streams deltas via `codex app-server`; `exec` uses one-shot `codex exec --json`. Default `auto` (interactive, falling back to exec if the app-server is unavailable). Overridable via `CODEX_TUI_MODE`. |
 | `--sessions-dir PATH` | Override the sessions directory (default: `$CODEX_HOME/sessions`). |
 | `--clean-trash` | Permanently delete trashed session transcripts and exit. |
 
@@ -55,6 +58,7 @@ Options:
 | `F3` | Pick the model for the session (from `~/.codex/models.json`) |
 | `F5` | Refresh projects / sessions |
 | `F7` | Load earlier messages of the current conversation |
+| `Esc` | Interrupt the running turn |
 | `q` | Quit (confirm with `Ctrl+Q`) |
 
 Session titles and model choices are stored in `~/.codex-tui/overrides.json`;
@@ -66,24 +70,28 @@ moved to `~/.codex-tui/trash` instead of being erased.
 - Session transcripts are parsed from the codex JSONL files under
   `$CODEX_HOME/sessions/YYYY/MM/DD/`. Unknown or future event types are ignored
   so newer CLI versions don't break browsing.
-- Sending a prompt runs
-  `codex exec --json --skip-git-repo-check -s <sandbox> -C <project> "<prompt>"`
-  for a new session, or
-  `codex exec resume --json -s <sandbox> <session-id> "<prompt>"` to continue
-  one. Output events are streamed into the chat, then the transcript is
-  re-read from disk.
+- In the default interactive mode a single `codex app-server --stdio` process
+  stays alive for the whole TUI session. New conversations start with
+  `thread/start`, existing ones resume with `thread/resume`, and every message
+  is a `turn/start` on the live thread — no per-message CLI cold start. The
+  server pushes `item/agentMessage/delta` notifications while the model
+  streams, which the chat renders incrementally and converts to Markdown when
+  the turn finishes.
+- If `codex app-server` is unavailable or a turn fails, the TUI falls back to
+  `codex exec --json` automatically, and the transcript is re-read from disk.
 - Deleted sessions are moved to `~/.codex-tui/trash` instead of being erased.
 
 ## Limitations
 
-- Turns are non-interactive (`codex exec --json`), so there are no in-TUI
-  approval prompts: the `--sandbox` value controls what Codex may do.
+- Turns use the app-server's `approvalPolicy: "never"` (the same behaviour as
+  non-interactive `codex exec`), so there are no in-TUI approval prompts: the
+  `--sandbox` value controls what Codex may do.
   `workspace-write` allows file changes inside the selected project;
   `read-only` forbids writes; `danger-full-access` allows anything.
 - If the `codex` binary is missing, sending a message shows an in-app error
   instead of crashing.
-- Replies arrive per completed turn (the JSON exec mode emits whole
-  `item.completed` messages, not character-by-character deltas).
+- `codex app-server` is an experimental CLI surface; if a future codex release
+  changes its protocol, the TUI degrades to `exec` mode instead of breaking.
 
 ## Development
 

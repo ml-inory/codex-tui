@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from rich.markup import escape
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -103,7 +104,8 @@ class ChatLog(VerticalScroll):
 
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
-        self._pending_markdown: Markdown | None = None
+        self._pending_stream: Static | None = None
+        self._pending_text = ""
         self._messages: list[Message] = []
         self._window = DEFAULT_WINDOW
 
@@ -157,6 +159,8 @@ class ChatLog(VerticalScroll):
 
     async def clear_chat(self) -> None:
         await self.remove_children(self.children)
+        self._pending_stream = None
+        self._pending_text = ""
 
     def _build_row(self, role: str, content: str) -> Widget:
         if role == "user":
@@ -174,20 +178,48 @@ class ChatLog(VerticalScroll):
         await self.add_message("user", content)
 
     async def begin_assistant_message(self) -> None:
-        markdown = Markdown("**Codex**", classes="md")
-        await self.mount(markdown)
-        self._pending_markdown = markdown
+        """Open a streaming row for the assistant's reply.
+
+        While the model streams we render plain text (``Text`` is not parsed
+        as markup) and only parse Markdown once at the end, so token-level
+        updates stay cheap.
+        """
+        stream = Static(Text(""), classes="bubble streaming")
+        await self.mount(stream)
+        self._pending_stream = stream
+        self._pending_text = ""
+        self.scroll_end(animate=False)
+
+    async def append_assistant_delta(self, delta: str) -> None:
+        """Append a streamed chunk to the open assistant message."""
+        if self._pending_stream is None:
+            await self.begin_assistant_message()
+        assert self._pending_stream is not None
+        self._pending_text += delta
+        self._pending_stream.update(Text(self._pending_text))
         self.scroll_end(animate=False)
 
     async def update_assistant_message(self, text: str) -> None:
-        if self._pending_markdown is None:
+        """Set the whole assistant body at once (non-streaming fallback)."""
+        if self._pending_stream is None:
             await self.begin_assistant_message()
-        assert self._pending_markdown is not None
-        self._pending_markdown.update(f"**Codex**\n\n{text}")
+        assert self._pending_stream is not None
+        self._pending_text = text
+        self._pending_stream.update(Text(text))
         self.scroll_end(animate=False)
 
     async def finish_assistant_message(self) -> None:
-        self._pending_markdown = None
+        """Render the finished assistant message as Markdown."""
+        if self._pending_stream is not None:
+            body = self._pending_text
+            await self._pending_stream.remove()
+            self._pending_stream = None
+            self._pending_text = ""
+            markdown = Markdown(
+                f"**Codex**\n\n{body}" if body else "**Codex**", classes="md"
+            )
+            await self.mount(markdown)
+            self.scroll_end(animate=False)
 
 
 class ChatView(Widget):
@@ -232,6 +264,9 @@ class ChatView(Widget):
 
     async def update_assistant_message(self, text: str) -> None:
         await self.query_one(ChatLog).update_assistant_message(text)
+
+    async def append_assistant_delta(self, delta: str) -> None:
+        await self.query_one(ChatLog).append_assistant_delta(delta)
 
     async def finish_assistant(self) -> None:
         await self.query_one(ChatLog).finish_assistant_message()
