@@ -55,6 +55,13 @@ Screen {
     border-bottom: solid $primary-darken-1;
 }
 
+#chat-status {
+    dock: top;
+    height: 1;
+    padding: 0 1;
+    color: $warning;
+}
+
 #chat-log {
     height: 1fr;
     width: 1fr;

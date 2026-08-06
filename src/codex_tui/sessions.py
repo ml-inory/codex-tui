@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
+DEFAULT_CODEX_TUI_HOME = Path.home() / ".codex-tui"
 TEXT_ITEM_TYPES = ("input_text", "output_text", "text")
 
 
@@ -120,11 +122,20 @@ def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", str(DEFAULT_CODEX_HOME)))
 
 
+def _codex_tui_home() -> Path:
+    return Path(os.environ.get("CODEX_TUI_HOME", str(DEFAULT_CODEX_TUI_HOME)))
+
+
 class SessionStore:
     """Scan ``$CODEX_HOME/sessions`` and expose projects and sessions."""
 
-    def __init__(self, sessions_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        sessions_dir: Path | None = None,
+        trash_dir: Path | None = None,
+    ) -> None:
         self.sessions_dir = sessions_dir or _codex_home() / "sessions"
+        self.trash_dir = trash_dir or _codex_tui_home() / "trash"
 
     def list_sessions(self) -> list[Session]:
         """All sessions, newest first."""
@@ -132,6 +143,8 @@ class SessionStore:
             return []
         sessions: list[Session] = []
         for path in sorted(self.sessions_dir.rglob("*.jsonl")):
+            if path.is_relative_to(self.trash_dir):
+                continue
             session = parse_session_file(path)
             if session.id:
                 sessions.append(session)
@@ -152,3 +165,11 @@ class SessionStore:
     def sessions_for_project(self, project: str) -> list[Session]:
         """Sessions belonging to one project, newest first."""
         return [s for s in self.list_sessions() if s.project == project]
+
+    def delete_session(self, session: Session) -> None:
+        """Move a session transcript to the trash dir (recoverable delete)."""
+        if not session.path.is_file():
+            return
+        self.trash_dir.mkdir(parents=True, exist_ok=True)
+        destination = self.trash_dir / f"{session.id}-{session.path.name}"
+        shutil.move(str(session.path), str(destination))

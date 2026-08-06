@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from codex_tui.sessions import Session, SessionStore, parse_session_file

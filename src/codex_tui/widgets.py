@@ -97,6 +97,10 @@ class Sidebar(Widget):
 class ChatLog(VerticalScroll):
     """Scrollable conversation area rendered as user bubbles and markdown."""
 
+    def __init__(self, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self._pending_markdown: Markdown | None = None
+
     async def render_session(self, session: Session) -> None:
         await self.clear_chat()
         for message in session.messages:
@@ -122,12 +126,37 @@ class ChatLog(VerticalScroll):
         await self.mount(row)
         self.scroll_end(animate=False)
 
+    async def add_user_message(self, content: str) -> None:
+        await self.add_message("user", content)
+
+    async def begin_assistant_message(self) -> None:
+        markdown = Markdown("", classes="md")
+        row = Vertical(
+            Static("Codex", classes="role assistant"),
+            markdown,
+            classes="row assistant",
+        )
+        await self.mount(row)
+        self._pending_markdown = markdown
+        self.scroll_end(animate=False)
+
+    async def update_assistant_message(self, text: str) -> None:
+        if self._pending_markdown is None:
+            await self.begin_assistant_message()
+        assert self._pending_markdown is not None
+        self._pending_markdown.update(text)
+        self.scroll_end(animate=False)
+
+    async def finish_assistant_message(self) -> None:
+        self._pending_markdown = None
+
 
 class ChatView(Widget):
     """Right panel: header, chat log, and prompt input."""
 
     def compose(self) -> ComposeResult:
         yield Static("Select a project and session", id="chat-header")
+        yield Static("", id="chat-status")
         yield ChatLog(id="chat-log")
         yield Input(placeholder="Message Codex… (Enter to send)", id="prompt-input")
 
@@ -141,3 +170,28 @@ class ChatView(Widget):
         model = session.model or "codex"
         header.update(f"{session.project}  |  {session.title}  |  {model}")
         await chat_log.render_session(session)
+
+    async def show_new_session(self, project: str | None) -> None:
+        """Show the empty state for a brand-new conversation."""
+        self.query_one("#chat-header", Static).update(
+            f"New session{' in ' + project if project else ''} — type a message to start"
+        )
+        self.query_one("#chat-status", Static).update("")
+        await self.query_one(ChatLog).clear_chat()
+
+    async def set_running(self, running: bool) -> None:
+        status = self.query_one("#chat-status", Static)
+        status.update("Codex is working…" if running else "")
+        self.query_one(Input).disabled = running
+
+    async def show_error(self, text: str) -> None:
+        self.query_one("#chat-status", Static).update(f"Error: {text}")
+
+    async def add_user_message(self, content: str) -> None:
+        await self.query_one(ChatLog).add_user_message(content)
+
+    async def update_assistant_message(self, text: str) -> None:
+        await self.query_one(ChatLog).update_assistant_message(text)
+
+    async def finish_assistant(self) -> None:
+        await self.query_one(ChatLog).finish_assistant_message()
