@@ -78,7 +78,12 @@ class Sidebar(Widget):
             await project_list.append(ListItem(Static(project, classes="project-label")))
         project_list.index = 0
 
-    async def set_sessions(self, sessions: Iterable[Session]) -> None:
+    async def set_sessions(
+        self,
+        sessions: Iterable[Session],
+        finished: set[str] | None = None,
+    ) -> None:
+        finished = finished or set()
         self._session_by_item = {}
         session_list = self.query_one("#session-list", ListView)
         await session_list.clear()
@@ -86,8 +91,16 @@ class Sidebar(Widget):
             await self._show_hint("No sessions for this project yet.")
             return
         for index, session in enumerate(sessions):
-            label = f"{session.timestamp[11:16] if len(session.timestamp) >= 16 else ''}  {session.title}"
-            item = ListItem(Static(label, classes="session-label"))
+            marker = "● " if session.id in finished else ""
+            label = (
+                f"{marker}"
+                f"{session.timestamp[11:16] if len(session.timestamp) >= 16 else ''}"
+                f"  {session.title}"
+            )
+            classes = "session-label"
+            if session.id in finished:
+                classes += " finished"
+            item = ListItem(Static(label, classes=classes))
             item.id = f"item-{index}"
             self._session_by_item[item.id] = session
             await session_list.append(item)

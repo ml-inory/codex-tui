@@ -18,6 +18,10 @@ conversation and a prompt input.
   or project) or cycle through the current project's sessions with
   `Ctrl+Up` / `Ctrl+Down`; the sidebar keeps your current selection when the
   session list refreshes
+- Turns run in the background: send a message in one session, switch to
+  another and keep working. When a background session finishes, a toast
+  appears, its title gets a `●` marker in the sidebar, and `Ctrl+G` jumps
+  straight to the most recently finished session
 - `Esc` interrupts the model mid-reply
 - Delete sessions (moved to `~/.codex-tui/trash`, recoverable)
 - Configurable sandbox so Codex can actually edit project files
@@ -64,6 +68,7 @@ Options:
 | `F7` | Load earlier messages of the current conversation |
 | `Ctrl+O` | Quick-switch to any session (type to filter, Enter to open) |
 | `Ctrl+Up` / `Ctrl+Down` (or `Alt+Up` / `Alt+Down`) | Cycle through sessions of the current project |
+| `Ctrl+G` | Jump to the most recently finished background session |
 | `Esc` | Interrupt the running turn |
 | `q` | Quit (confirm with `Ctrl+Q`) |
 
@@ -83,6 +88,11 @@ moved to `~/.codex-tui/trash` instead of being erased.
   server pushes `item/agentMessage/delta` notifications while the model
   streams, which the chat renders incrementally and converts to Markdown when
   the turn finishes.
+- Several sessions can run turns at the same time; each one subscribes to its
+  own thread's notifications, and streamed text is buffered per session so a
+  background reply never leaks into the view you are currently looking at.
+  Completion of a background turn is reported with an in-app notification, a
+  sidebar marker, and the `Ctrl+G` jump shortcut.
 - If `codex app-server` is unavailable or a turn fails, the TUI falls back to
   `codex exec --json` automatically, and the transcript is re-read from disk.
 - Deleted sessions are moved to `~/.codex-tui/trash` instead of being erased.

@@ -15,6 +15,14 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+async def _wait_for_listener(fake, thread_id: str) -> None:
+    for _ in range(500):
+        if thread_id in fake.client._listeners:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"turn never subscribed for {thread_id}")
+
+
 class FakeAppServer:
     """In-process stand-in for the codex app-server stdio protocol."""
 
@@ -56,7 +64,17 @@ class FakeAppServer:
         fut.set_result(payload)
 
     def push(self, method: str, params: dict) -> None:
-        self.client._notifications.put_nowait((method, params))
+        if method == _SERVER_EXITED:
+            for queue in list(self.client._listeners.values()):
+                queue.put_nowait((method, params))
+            self.client._notifications.put_nowait((method, params))
+            return
+        thread_id = params.get("threadId")
+        queue = self.client._listeners.get(thread_id) if thread_id else None
+        if queue is not None:
+            queue.put_nowait((method, params))
+        else:
+            self.client._notifications.put_nowait((method, params))
 
 
 def test_handle_line_resolves_pending_response() -> None:
@@ -139,6 +157,20 @@ def test_interactive_runner_streams_deltas_and_completes() -> None:
 
     async def scenario() -> None:
         runner = InteractiveCodexRunner(client_factory=fake.attach)
+        events: list[dict] = []
+
+        async def collect() -> None:
+            events.extend(
+                [
+                    event
+                    async for event in runner.run_turn(
+                        project="/proj/x", prompt="hi", session_id=None, model="m"
+                    )
+                ]
+            )
+
+        task = asyncio.create_task(collect())
+        await _wait_for_listener(fake, "thread-1")
         fake.push(
             "item/agentMessage/delta",
             {"threadId": "thread-1", "turnId": "turn-1", "itemId": "i1", "delta": "Hel"},
@@ -159,19 +191,14 @@ def test_interactive_runner_streams_deltas_and_completes() -> None:
             "turn/completed",
             {"threadId": "thread-1", "turnId": "turn-1", "status": "completed"},
         )
-
-        events = [
-            event
-            async for event in runner.run_turn(
-                project="/proj/x", prompt="hi", session_id=None, model="m"
-            )
-        ]
+        await asyncio.wait_for(task, timeout=5)
         assert events[0] == {"type": "thread.started", "thread_id": "thread-1"}
         assert events[1] == {
             "type": "agent_message.delta",
             "text": "Hel",
             "item_id": "i1",
             "turn_id": "turn-1",
+            "thread_id": "thread-1",
         }
         assert events[2]["type"] == "agent_message.delta"
         assert events[2]["text"] == "lo"
@@ -188,19 +215,28 @@ def test_interactive_runner_resumes_existing_session() -> None:
 
     async def scenario() -> None:
         runner = InteractiveCodexRunner(client_factory=fake.attach)
+        events: list[dict] = []
+
+        async def collect() -> None:
+            events.extend(
+                [
+                    event
+                    async for event in runner.run_turn(
+                        project="/proj/x",
+                        prompt="again",
+                        session_id="019f-abc",
+                        model=None,
+                    )
+                ]
+            )
+
+        task = asyncio.create_task(collect())
+        await _wait_for_listener(fake, "019f-abc")
         fake.push(
             "turn/completed",
             {"threadId": "019f-abc", "turnId": "turn-1", "status": "completed"},
         )
-        events = [
-            event
-            async for event in runner.run_turn(
-                project="/proj/x",
-                prompt="again",
-                session_id="019f-abc",
-                model=None,
-            )
-        ]
+        await asyncio.wait_for(task, timeout=5)
         resume = fake.sent[0]
         assert resume["method"] == "thread/resume"
         assert resume["params"]["threadId"] == "019f-abc"
@@ -214,12 +250,78 @@ def test_interactive_runner_fails_when_server_exits_mid_turn() -> None:
 
     async def scenario() -> None:
         runner = InteractiveCodexRunner(client_factory=fake.attach)
-        fake.push(_SERVER_EXITED, {})
-        with pytest.raises(CodexRunError, match="exited during"):
+
+        async def collect() -> None:
             async for _ in runner.run_turn(
                 project="/proj/x", prompt="hi", session_id=None, model=None
             ):
                 pass
+
+        task = asyncio.create_task(collect())
+        await _wait_for_listener(fake, "thread-1")
+        fake.push(_SERVER_EXITED, {})
+        with pytest.raises(CodexRunError, match="exited during"):
+            await asyncio.wait_for(task, timeout=5)
+
+    _run(scenario())
+
+
+def test_two_threads_stream_independently() -> None:
+    """Concurrent turns on different sessions must not steal deltas."""
+    fake = FakeAppServer()
+
+    async def scenario() -> None:
+        runner = InteractiveCodexRunner(client_factory=fake.attach)
+        results: list[list[dict]] = []
+
+        async def consume(session_id: str, prompt: str) -> None:
+            events = [
+                event
+                async for event in runner.run_turn(
+                    project="/proj/x",
+                    prompt=prompt,
+                    session_id=session_id,
+                    model=None,
+                )
+            ]
+            results.append(events)
+
+        task_a = asyncio.create_task(consume("sess-a", "hi"))
+        task_b = asyncio.create_task(consume("sess-b", "yo"))
+        for _ in range(500):
+            if len(fake.client._listeners) >= 2:
+                break
+            await asyncio.sleep(0)
+        assert len(fake.client._listeners) == 2
+        fake.push(
+            "item/agentMessage/delta",
+            {"threadId": "sess-a", "turnId": "turn-1", "itemId": "i1", "delta": "A1"},
+        )
+        fake.push(
+            "item/agentMessage/delta",
+            {"threadId": "sess-b", "turnId": "turn-1", "itemId": "i1", "delta": "B1"},
+        )
+        fake.push(
+            "item/agentMessage/delta",
+            {"threadId": "sess-a", "turnId": "turn-1", "itemId": "i1", "delta": "A2"},
+        )
+        fake.push(
+            "turn/completed",
+            {"threadId": "sess-b", "turnId": "turn-1", "status": "completed"},
+        )
+        fake.push(
+            "turn/completed",
+            {"threadId": "sess-a", "turnId": "turn-1", "status": "completed"},
+        )
+        await asyncio.wait_for(
+            asyncio.gather(task_a, task_b),
+            timeout=5,
+        )
+        by_thread = {
+            events[0]["thread_id"]: [e.get("text") for e in events if e.get("type") == "agent_message.delta"]
+            for events in results
+        }
+        assert by_thread == {"sess-a": ["A1", "A2"], "sess-b": ["B1"]}
 
     _run(scenario())
 

@@ -75,7 +75,7 @@ class CodexRunner:
     async def stop(self) -> None:
         """Lifecycle hook; the non-interactive runner needs no teardown."""
 
-    async def interrupt(self) -> None:
+    async def interrupt(self, thread_id: str | None = None) -> None:
         """Lifecycle hook; ``codex exec`` turns cannot be interrupted."""
 
     async def run_turn(
