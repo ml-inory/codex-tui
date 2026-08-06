@@ -25,6 +25,7 @@ class AppSettings:
 
     path: Path
     project_mode: str = "short"  # "short" shows the deepest dir, "full" the path
+    sidebar_visible: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppSettings":
@@ -39,6 +40,9 @@ class AppSettings:
             mode = raw.get("project_mode")
             if mode in ("short", "full"):
                 settings.project_mode = mode
+            visible = raw.get("sidebar_visible")
+            if isinstance(visible, bool):
+                settings.sidebar_visible = visible
         return settings
 
     def save(self) -> None:
@@ -46,7 +50,10 @@ class AppSettings:
         temporary = self.path.with_suffix(".json.tmp")
         temporary.write_text(
             json.dumps(
-                {"project_mode": self.project_mode},
+                {
+                    "project_mode": self.project_mode,
+                    "sidebar_visible": self.sidebar_visible,
+                },
                 ensure_ascii=False,
                 indent=2,
             )

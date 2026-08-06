@@ -3,9 +3,9 @@ Screen {
 }
 
 #sidebar {
-    width: 32%;
-    min-width: 28;
-    max-width: 46;
+    width: 24%;
+    min-width: 22;
+    max-width: 32;
     height: 1fr;
     background: $surface;
     border-right: solid $accent-darken-2;
@@ -46,7 +46,7 @@ Screen {
 }
 
 #chat-view {
-    width: 60%;
+    width: 1fr;
     height: 1fr;
     layout: vertical;
     padding: 0 1;

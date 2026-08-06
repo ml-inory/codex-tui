@@ -450,6 +450,31 @@ def test_key_help_screen_lists_bindings(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_toggle_sidebar_hides_and_persists(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+
+    async def scenario() -> None:
+        first = CodexTuiApp(sessions_dir=tmp_path, settings_path=settings_path)
+        async with first.run_test() as pilot:
+            await pilot.pause()
+            sidebar = first.query_one(Sidebar)
+            assert sidebar.display is True
+            first.action_toggle_sidebar()
+            await pilot.pause()
+            assert sidebar.display is False
+            assert settings_path.is_file()
+            assert '"sidebar_visible": false' in settings_path.read_text(
+                encoding="utf-8"
+            )
+
+        second = CodexTuiApp(sessions_dir=tmp_path, settings_path=settings_path)
+        async with second.run_test() as pilot:
+            await pilot.pause()
+            assert second.query_one(Sidebar).display is False
+
+    _run(scenario())
+
+
 def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> None:
     fake = FakeCodex(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
 
