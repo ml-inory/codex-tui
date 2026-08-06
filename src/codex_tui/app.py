@@ -12,6 +12,7 @@ import time
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.widgets import Footer, Input, ListView
 
 from codex_tui.overrides import Overrides
@@ -32,7 +33,7 @@ from codex_tui.sessions import (
 )
 from codex_tui.settings import AppSettings
 from codex_tui.streaming import InteractiveCodexRunner
-from codex_tui.widgets import ChatLog, ChatView, Sidebar
+from codex_tui.widgets import ChatLog, ChatView, Sidebar, WatchPane
 
 
 class CodexTuiApp(App[None]):
@@ -55,6 +56,8 @@ class CodexTuiApp(App[None]):
         Binding("f5", "refresh_sessions", "Refresh", show=True),
         Binding("f7", "load_earlier", "Earlier", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=True),
+        Binding("ctrl+backslash", "toggle_split", "Split", show=True),
+        Binding("ctrl+t", "swap_panes", "Swap", show=True),
         Binding("ctrl+o", "quick_switch", "Switch", show=True),
         Binding(
             "ctrl+up,alt+up",
@@ -112,6 +115,7 @@ class CodexTuiApp(App[None]):
         self._stream_buffers: dict[str, str] = {}
         # Session id -> title of turns that finished while not being viewed.
         self._finished_sessions: dict[str, str] = {}
+        self._watch_session: Session | None = None
         # Serializes session-view mutations: with background turns several
         # workers finish concurrently and must not interleave DOM updates.
         self._view_lock = asyncio.Lock()
@@ -135,11 +139,14 @@ class CodexTuiApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Sidebar(id="sidebar")
-        yield ChatView(id="chat-view")
+        with Horizontal(id="panes"):
+            yield ChatView(id="chat-view")
+            yield WatchPane(id="watch-pane")
         yield Footer()
 
     async def on_mount(self) -> None:
         self.query_one(Sidebar).display = self.settings.sidebar_visible
+        self.query_one(WatchPane).display = False
         await self._backfill_titles()
         if getattr(self.runner, "interactive", False):
             try:
@@ -286,6 +293,7 @@ class CodexTuiApp(App[None]):
             self._project_sessions = []
             await self.query_one(ChatView).show_session(None)
             await self.query_one(ChatView).set_running(False)
+            await self._refresh_watch_pane_locked()
             return
         if self.current_project is None or self.current_project not in projects:
             self.current_project = projects[0]
@@ -299,6 +307,7 @@ class CodexTuiApp(App[None]):
         else:
             self.current_session = None
             await self._show_new_session_view_locked(self.current_project)
+        await self._refresh_watch_pane_locked()
 
     async def open_session(self, session: Session) -> None:
         async with self._view_lock:
@@ -357,6 +366,7 @@ class CodexTuiApp(App[None]):
         else:
             self.current_session = None
             await self._show_new_session_view_locked(project)
+        await self._refresh_watch_pane_locked()
 
     async def _open_preferred_session_locked(
         self,
@@ -500,6 +510,93 @@ class CodexTuiApp(App[None]):
             else "侧栏已显示",
             timeout=3,
         )
+
+    def action_toggle_split(self) -> None:
+        """Open (pick a session) or close the split watch pane."""
+        if self.query_one(WatchPane).display:
+            self.run_worker(self._close_watch_pane())
+            return
+        sessions = [
+            self.overrides.apply(session)
+            for session in self.store.list_sessions()
+        ][:200]
+        if not sessions:
+            self.notify("No sessions yet", severity="warning")
+            return
+        self.push_screen(QuickSwitchScreen(sessions), self._on_watch_pick)
+
+    def _on_watch_pick(self, session: Session | None) -> None:
+        if session is None:
+            return
+        self.run_worker(self._open_watch_pane(session))
+
+    async def _open_watch_pane(self, session: Session) -> None:
+        session = self.overrides.apply(session)
+        async with self._view_lock:
+            watch = self.query_one(WatchPane)
+            watch.display = True
+            self._watch_session = session
+            await watch.show_session(session)
+            await watch.set_running(session.id in self._active_sessions)
+            if session.id in self._stream_buffers:
+                await watch.begin_stream(self._stream_buffers[session.id])
+        self.notify(f"分屏查看：{session.title}", timeout=3)
+
+    async def _close_watch_pane(self) -> None:
+        async with self._view_lock:
+            self._watch_session = None
+            watch = self.query_one(WatchPane)
+            watch.display = False
+            await watch.show_session(None)
+
+    def action_swap_panes(self) -> None:
+        """Swap the active session with the watched one."""
+        watched = self._watch_session
+        if watched is None:
+            self.notify("没有分屏可交换", severity="warning")
+            return
+        active = self.current_session
+        self._watch_session = active
+        self.run_worker(self._swap_panes(watched, active))
+
+    async def _swap_panes(self, watched: Session, active: Session | None) -> None:
+        await self.open_session(watched)
+        async with self._view_lock:
+            watch = self.query_one(WatchPane)
+            if active is None:
+                await watch.show_session(None)
+                await watch.set_running(False)
+            else:
+                await watch.show_session(active)
+                await watch.set_running(active.id in self._active_sessions)
+                if active.id in self._stream_buffers:
+                    await watch.begin_stream(self._stream_buffers[active.id])
+
+    async def _refresh_watch_pane(self) -> None:
+        async with self._view_lock:
+            await self._refresh_watch_pane_locked()
+
+    async def _refresh_watch_pane_locked(self) -> None:
+        """Re-render the watch pane from disk; close it if the session vanished."""
+        watched = self._watch_session
+        if watched is None or not self.query_one(WatchPane).display:
+            return
+        fresh = next(
+            (s for s in self.store.list_sessions() if s.id == watched.id),
+            None,
+        )
+        watch = self.query_one(WatchPane)
+        if fresh is None:
+            self._watch_session = None
+            watch.display = False
+            await watch.show_session(None)
+            return
+        fresh = self.overrides.apply(fresh)
+        self._watch_session = fresh
+        await watch.show_session(fresh)
+        await watch.set_running(fresh.id in self._active_sessions)
+        if fresh.id in self._stream_buffers:
+            await watch.begin_stream(self._stream_buffers[fresh.id])
 
     async def _apply_project_mode(self) -> None:
         async with self._view_lock:
@@ -680,6 +777,13 @@ class CodexTuiApp(App[None]):
                                 )
                                 if self._view_stream_key == key:
                                     await chat.append_assistant_delta(text)
+                                if (
+                                    self._watch_session is not None
+                                    and self._watch_session.id == key
+                                ):
+                                    await self.query_one(
+                                        WatchPane
+                                    ).append_assistant_delta(text)
                         elif event_type == "item.completed":
                             item = event.get("item") or {}
                             if (

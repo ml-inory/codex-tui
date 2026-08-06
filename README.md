@@ -13,6 +13,9 @@ conversation and a prompt input.
   `Ctrl+B` hides the sidebar entirely for a full-width chat (remembered)
 - `F1` opens a searchable keyboard shortcut reference, so the footer never
   needs to fit everything
+- tmux-style split view: `Ctrl+\` opens a second read-only pane showing
+  another session side by side (it even streams live), `Ctrl+T` swaps the
+  active and watched session, and `Ctrl+\` again closes the split
 - Markdown-rendered conversations (user messages as bubbles, assistant replies
   as markdown)
 - Start a new session or resume an existing one; replies stream in
@@ -76,6 +79,8 @@ Options:
 | `F5` | Refresh projects / sessions |
 | `F7` | Load earlier messages of the current conversation |
 | `Ctrl+B` | Toggle the left sidebar (full-width chat when hidden) |
+| `Ctrl+\` | Open/close the split pane (pick which session to watch) |
+| `Ctrl+T` | Swap the active session with the watched one |
 | `Ctrl+O` | Quick-switch to any session (type to filter, Enter to open) |
 | `Ctrl+Up` / `Ctrl+Down` (or `Alt+Up` / `Alt+Down`) | Cycle through sessions of the current project |
 | `Ctrl+G` | Jump to the most recently finished background session |

@@ -299,3 +299,44 @@ class ChatView(Widget):
 
     async def finish_assistant(self) -> None:
         await self.query_one(ChatLog).finish_assistant_message()
+
+
+class WatchPane(Widget):
+    """Read-only split view of a second session next to the active chat."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="watch-header", classes="watch-header")
+        yield Static("", id="watch-status", classes="watch-status")
+        yield ChatLog(id="watch-log")
+
+    async def show_session(self, session: Session | None) -> None:
+        header = self.query_one("#watch-header", Static)
+        status = self.query_one("#watch-status", Static)
+        chat_log = self.query_one("#watch-log", ChatLog)
+        if session is None:
+            header.update("")
+            status.update("")
+            await chat_log.clear_chat()
+            return
+        model = session.effective_model or "codex"
+        header.update(f"{session.project}  |  {session.title}  |  {model}")
+        status.update("")
+        await chat_log.render_session(session)
+
+    async def set_running(self, running: bool) -> None:
+        self.query_one("#watch-status", Static).update(
+            "Codex is working…" if running else ""
+        )
+
+    async def begin_stream(self, text: str) -> None:
+        """Render the already-accumulated stream for the watched session."""
+        chat_log = self.query_one("#watch-log", ChatLog)
+        await chat_log.begin_assistant_message()
+        if text:
+            await chat_log.update_assistant_message(text)
+
+    async def append_assistant_delta(self, delta: str) -> None:
+        await self.query_one("#watch-log", ChatLog).append_assistant_delta(delta)
+
+    async def finish_assistant(self) -> None:
+        await self.query_one("#watch-log", ChatLog).finish_assistant_message()
