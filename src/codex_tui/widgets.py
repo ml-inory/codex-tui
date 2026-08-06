@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from rich.markup import escape
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -11,7 +12,10 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, ListItem, ListView, Markdown, Static
 
-from codex_tui.sessions import Session
+from codex_tui.sessions import Message, Session, is_injected_message
+
+
+DEFAULT_WINDOW = 80
 
 
 class Sidebar(Widget):
@@ -100,43 +104,78 @@ class ChatLog(VerticalScroll):
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self._pending_markdown: Markdown | None = None
+        self._messages: list[Message] = []
+        self._window = DEFAULT_WINDOW
 
     async def render_session(self, session: Session) -> None:
+        self._messages = [
+            message
+            for message in session.messages
+            if not (message.role == "user" and is_injected_message(message.content))
+        ]
+        self._window = DEFAULT_WINDOW
+        await self._render_window()
+
+    async def _render_window(self) -> None:
         await self.clear_chat()
-        for message in session.messages:
-            await self.add_message(message.role, message.content)
+        start = max(0, len(self._messages) - self._window)
+        rows: list[Widget] = []
+        if start > 0:
+            rows.append(
+                Static(
+                    f"[dim]▲ {start} 条更早消息 · 按 F7 加载[/]",
+                    id="earlier-hint",
+                    classes="earlier-hint",
+                )
+            )
+        for message in self._messages[start:]:
+            rows.append(self._build_row(message.role, message.content))
+        if rows:
+            await self.mount(*rows)
+            self.refresh(layout=True)
         self.scroll_end(animate=False)
+
+    async def load_earlier(self) -> bool:
+        """Expand the visible window upward; returns True if more was loaded."""
+        if len(self._messages) <= self._window:
+            return False
+        old_start = max(0, len(self._messages) - self._window)
+        self._window += DEFAULT_WINDOW
+        await self._render_window()
+        new_start = max(0, len(self._messages) - self._window)
+        offset = old_start - new_start
+        widgets = [
+            child
+            for child in self.children
+            if not (isinstance(child, Static) and child.id == "earlier-hint")
+        ]
+        if 0 <= offset < len(widgets):
+            self.scroll_to_widget(widgets[offset], animate=False)
+        else:
+            self.scroll_end(animate=False)
+        return True
 
     async def clear_chat(self) -> None:
         await self.remove_children(self.children)
 
-    async def add_message(self, role: str, content: str) -> None:
+    def _build_row(self, role: str, content: str) -> Widget:
         if role == "user":
-            row = Vertical(
-                Static("You", classes="role user"),
-                Static(content, classes="bubble user"),
-                classes="row user",
-            )
-        else:
-            row = Vertical(
-                Static("Codex", classes="role assistant"),
-                Markdown(content, classes="md"),
-                classes="row assistant",
-            )
-        await self.mount(row)
+            # Flat widgets are required: nested containers inside a
+            # VerticalScroll collapse to one line in Textual 8.2.8 once the
+            # content exceeds the viewport (long conversations).
+            return Static(f"[b]You[/b]\n{escape(content)}", classes="bubble user")
+        return Markdown(f"**Codex**\n\n{content}", classes="md")
+
+    async def add_message(self, role: str, content: str) -> None:
+        await self.mount(self._build_row(role, content))
         self.scroll_end(animate=False)
 
     async def add_user_message(self, content: str) -> None:
         await self.add_message("user", content)
 
     async def begin_assistant_message(self) -> None:
-        markdown = Markdown("", classes="md")
-        row = Vertical(
-            Static("Codex", classes="role assistant"),
-            markdown,
-            classes="row assistant",
-        )
-        await self.mount(row)
+        markdown = Markdown("**Codex**", classes="md")
+        await self.mount(markdown)
         self._pending_markdown = markdown
         self.scroll_end(animate=False)
 
@@ -144,7 +183,7 @@ class ChatLog(VerticalScroll):
         if self._pending_markdown is None:
             await self.begin_assistant_message()
         assert self._pending_markdown is not None
-        self._pending_markdown.update(text)
+        self._pending_markdown.update(f"**Codex**\n\n{text}")
         self.scroll_end(animate=False)
 
     async def finish_assistant_message(self) -> None:
@@ -167,14 +206,15 @@ class ChatView(Widget):
             header.update("Select a project and session")
             await chat_log.clear_chat()
             return
-        model = session.model or "codex"
+        model = session.effective_model or "codex"
         header.update(f"{session.project}  |  {session.title}  |  {model}")
         await chat_log.render_session(session)
 
-    async def show_new_session(self, project: str | None) -> None:
+    async def show_new_session(self, project: str | None, model: str | None = None) -> None:
         """Show the empty state for a brand-new conversation."""
+        suffix = f" (model: {model})" if model else ""
         self.query_one("#chat-header", Static).update(
-            f"New session{' in ' + project if project else ''} — type a message to start"
+            f"New session{' in ' + project if project else ''} — type a message to start{suffix}"
         )
         self.query_one("#chat-status", Static).update("")
         await self.query_one(ChatLog).clear_chat()

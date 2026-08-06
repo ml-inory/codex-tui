@@ -20,6 +20,7 @@ def build_codex_command(
     session_id: str | None = None,
     codex_bin: str = DEFAULT_CODEX_BIN,
     sandbox: str | None = None,
+    model: str | None = None,
 ) -> list[str]:
     """Build the ``codex exec`` command line for a new or resumed turn."""
     if session_id:
@@ -32,6 +33,8 @@ def build_codex_command(
         ]
         if sandbox:
             command += ["-s", sandbox]
+        if model:
+            command += ["-m", model]
         command += [session_id, prompt]
         return command
     command = [
@@ -42,6 +45,8 @@ def build_codex_command(
     ]
     if sandbox:
         command += ["-s", sandbox]
+    if model:
+        command += ["-m", model]
     command += ["-C", project, prompt]
     return command
 
@@ -53,9 +58,11 @@ class CodexRunner:
         self,
         codex_bin: str = DEFAULT_CODEX_BIN,
         sandbox: str | None = None,
+        model: str | None = None,
     ) -> None:
         self.codex_bin = codex_bin
         self.sandbox = sandbox
+        self.model = model
 
     async def run_turn(
         self,
@@ -63,6 +70,7 @@ class CodexRunner:
         project: str,
         prompt: str,
         session_id: str | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[dict]:
         """Spawn codex and yield decoded events until the turn completes."""
         command = build_codex_command(
@@ -71,14 +79,20 @@ class CodexRunner:
             session_id,
             self.codex_bin,
             self.sandbox,
+            model,
         )
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            cwd=project,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=project,
+            )
+        except FileNotFoundError as exc:
+            raise CodexRunError(
+                f"codex executable not found: {self.codex_bin}"
+            ) from exc
         assert process.stdout is not None
         try:
             async for raw_line in process.stdout:

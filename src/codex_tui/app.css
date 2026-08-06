@@ -47,8 +47,7 @@ Screen {
 }
 
 #chat-header {
-    dock: top;
-    height: 3;
+    height: auto;
     padding: 0 1;
     color: $text-muted;
     content-align: left middle;
@@ -56,8 +55,7 @@ Screen {
 }
 
 #chat-status {
-    dock: top;
-    height: 1;
+    height: auto;
     padding: 0 1;
     color: $warning;
 }
@@ -69,32 +67,62 @@ Screen {
 }
 
 #prompt-input {
-    dock: bottom;
-    height: 3;
+    height: auto;
     margin: 0 0 1 0;
-}
-
-.row {
-    margin-bottom: 1;
-}
-
-.role {
-    text-style: bold;
-}
-
-.role.user {
-    color: $accent;
-}
-
-.role.assistant {
-    color: $success;
 }
 
 .bubble.user {
     background: $panel;
-    padding: 0 1;
+    padding: 0 1 1 1;
 }
 
 .md {
     width: 1fr;
+    padding-bottom: 1;
+}
+
+.earlier-hint {
+    color: $text-muted;
+    text-style: italic;
+    padding: 0 1;
+}
+
+#rename-dialog {
+    width: 60;
+    height: auto;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#model-dialog {
+    width: 60;
+    height: auto;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#model-list {
+    height: 8;
+    border: round $primary-darken-1;
+}
+
+.model-label {
+    width: 100%;
+    overflow: hidden;
+    padding: 0 1;
+}
+
+.dialog-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.dialog-buttons {
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
 }

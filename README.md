@@ -41,6 +41,7 @@ Options:
 | `--sandbox read-only\|workspace-write\|danger-full-access` | Sandbox passed to `codex exec`; default `workspace-write` (edits allowed inside the selected project). Overridable via `CODEX_TUI_SANDBOX`. |
 | `--codex-bin PATH` | Path to the codex binary (default: `codex`). |
 | `--sessions-dir PATH` | Override the sessions directory (default: `$CODEX_HOME/sessions`). |
+| `--clean-trash` | Permanently delete trashed session transcripts and exit. |
 
 ## Key bindings
 
@@ -48,10 +49,17 @@ Options:
 | --- | --- |
 | `Tab` / `Shift+Tab` | Move between sidebar and prompt |
 | `Enter` | Send the prompt (new session if none is open, otherwise resume) |
-| `n` | New session |
-| `d` | Delete the current session (press again to confirm) |
-| `r` | Refresh projects / sessions |
+| `Ctrl+N` | New session |
+| `Ctrl+D` | Delete the current session (press again to confirm) |
+| `Ctrl+R` | Rename the current session |
+| `F3` | Pick the model for the session (from `~/.codex/models.json`) |
+| `F5` | Refresh projects / sessions |
+| `F7` | Load earlier messages of the current conversation |
 | `q` | Quit (confirm with `Ctrl+Q`) |
+
+Session titles and model choices are stored in `~/.codex-tui/overrides.json`;
+the codex session files themselves are never modified. Deleted sessions are
+moved to `~/.codex-tui/trash` instead of being erased.
 
 ## How it works
 
@@ -72,6 +80,8 @@ Options:
   approval prompts: the `--sandbox` value controls what Codex may do.
   `workspace-write` allows file changes inside the selected project;
   `read-only` forbids writes; `danger-full-access` allows anything.
+- If the `codex` binary is missing, sending a message shows an in-app error
+  instead of crashing.
 - Replies arrive per completed turn (the JSON exec mode emits whole
   `item.completed` messages, not character-by-character deltas).
 
