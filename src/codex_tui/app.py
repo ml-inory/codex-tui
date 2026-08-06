@@ -54,6 +54,7 @@ class CodexTuiApp(App[None]):
         Binding("f3", "pick_model", "Model", show=True),
         Binding("f5", "refresh_sessions", "Refresh", show=True),
         Binding("f7", "load_earlier", "Earlier", show=True),
+        Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=True),
         Binding("ctrl+o", "quick_switch", "Switch", show=True),
         Binding(
             "ctrl+up,alt+up",
@@ -138,6 +139,7 @@ class CodexTuiApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self.query_one(Sidebar).display = self.settings.sidebar_visible
         await self._backfill_titles()
         if getattr(self.runner, "interactive", False):
             try:
@@ -486,6 +488,18 @@ class CodexTuiApp(App[None]):
         )
         self.notify(f"项目路径显示：{label}", timeout=3)
         self.run_worker(self._apply_project_mode())
+
+    def action_toggle_sidebar(self) -> None:
+        """Show or hide the left sidebar (VS Code-style Ctrl+B)."""
+        self.settings.sidebar_visible = not self.settings.sidebar_visible
+        self.settings.save()
+        self.query_one(Sidebar).display = self.settings.sidebar_visible
+        self.notify(
+            "侧栏已隐藏（Ctrl+O 快速切换）"
+            if not self.settings.sidebar_visible
+            else "侧栏已显示",
+            timeout=3,
+        )
 
     async def _apply_project_mode(self) -> None:
         async with self._view_lock:

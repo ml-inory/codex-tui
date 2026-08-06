@@ -9,7 +9,8 @@ conversation and a prompt input.
 
 - Sidebar with project list and per-project session list (read from
   `$CODEX_HOME/sessions`, e.g. `~/.codex/sessions`); projects show their
-  deepest directory by default, `F2` toggles the full path (remembered)
+  deepest directory by default, `F2` toggles the full path (remembered);
+  `Ctrl+B` hides the sidebar entirely for a full-width chat (remembered)
 - `F1` opens a searchable keyboard shortcut reference, so the footer never
   needs to fit everything
 - Markdown-rendered conversations (user messages as bubbles, assistant replies
@@ -74,6 +75,7 @@ Options:
 | `F3` | Pick the model for the session (from `~/.codex/models.json`) |
 | `F5` | Refresh projects / sessions |
 | `F7` | Load earlier messages of the current conversation |
+| `Ctrl+B` | Toggle the left sidebar (full-width chat when hidden) |
 | `Ctrl+O` | Quick-switch to any session (type to filter, Enter to open) |
 | `Ctrl+Up` / `Ctrl+Down` (or `Alt+Up` / `Alt+Down`) | Cycle through sessions of the current project |
 | `Ctrl+G` | Jump to the most recently finished background session |
