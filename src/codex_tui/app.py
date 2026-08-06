@@ -11,12 +11,12 @@ import time
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer, Input
+from textual.widgets import Footer, Input, ListView
 
 from codex_tui.overrides import Overrides
 from codex_tui.models import load_model_catalog
 from codex_tui.runner import CodexRunner, CodexRunError
-from codex_tui.screens import ModelScreen, RenameScreen
+from codex_tui.screens import ModelScreen, QuickSwitchScreen, RenameScreen
 from codex_tui.sessions import (
     INJECTED_PREFIXES,
     Session,
@@ -44,6 +44,19 @@ class CodexTuiApp(App[None]):
         Binding("f3", "pick_model", "Model", show=True),
         Binding("f5", "refresh_sessions", "Refresh", show=True),
         Binding("f7", "load_earlier", "Earlier", show=True),
+        Binding("ctrl+o", "quick_switch", "Switch", show=True),
+        Binding(
+            "ctrl+up,alt+up",
+            "previous_session",
+            "Prev session",
+            show=True,
+        ),
+        Binding(
+            "ctrl+down,alt+down",
+            "next_session",
+            "Next session",
+            show=True,
+        ),
         Binding("escape", "interrupt_turn", "Interrupt", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -67,6 +80,7 @@ class CodexTuiApp(App[None]):
         self.fallback_runner = fallback_runner
         self.current_session: Session | None = None
         self.current_project: str | None = None
+        self._project_sessions: list[Session] = []
         # Named to avoid Textual's internal `_running` app flag.
         self.turn_active = False
         self.pending_model: str | None = None
@@ -214,15 +228,17 @@ class CodexTuiApp(App[None]):
         if not projects:
             self.current_project = None
             self.current_session = None
+            self._project_sessions = []
             await self.query_one(ChatView).show_session(None)
             return
         self.current_project = projects[0]
         sessions = self.store.sessions_for_project(projects[0])
         for index, session in enumerate(sessions):
             sessions[index] = self.overrides.apply(session)
+        self._project_sessions = sessions
         await sidebar.set_sessions(sessions)
         if sessions:
-            await self.open_session(sessions[0])
+            await self._open_preferred_session(sessions)
         else:
             self.current_session = None
             await self.query_one(ChatView).show_new_session(projects[0])
@@ -236,17 +252,48 @@ class CodexTuiApp(App[None]):
     def on_sidebar_project_selected(self, message: Sidebar.ProjectSelected) -> None:
         self.run_worker(self._project_selected(message.project), exclusive=True)
 
-    async def _project_selected(self, project: str) -> None:
+    async def _project_selected(
+        self, project: str, select_id: str | None = None
+    ) -> None:
         self.current_project = project
         sessions = self.store.sessions_for_project(project)
         for index, session in enumerate(sessions):
             sessions[index] = self.overrides.apply(session)
+        self._project_sessions = sessions
         await self.query_one(Sidebar).set_sessions(sessions)
         if sessions:
-            await self.open_session(sessions[0])
+            preferred = select_id
+            if preferred is None and self.current_session is not None:
+                preferred = self.current_session.id
+            target = next(
+                (s for s in sessions if s.id == preferred), None
+            )
+            await self._open_preferred_session(sessions, preferred=target)
         else:
             self.current_session = None
             await self.query_one(ChatView).show_new_session(project)
+
+    async def _open_preferred_session(
+        self,
+        sessions: list[Session],
+        preferred: Session | None = None,
+    ) -> None:
+        """Open the preferred session (or the newest) and sync the sidebar."""
+        if preferred is None and self.current_session is not None:
+            preferred = next(
+                (s for s in sessions if s.id == self.current_session.id),
+                None,
+            )
+        target = preferred or sessions[0]
+        await self.open_session(target)
+        self._sync_sidebar_selection(target)
+
+    def _sync_sidebar_selection(self, session: Session) -> None:
+        session_list = self.query_one("#session-list", ListView)
+        for index, candidate in enumerate(self._project_sessions):
+            if candidate.id == session.id:
+                session_list.index = index
+                return
 
     def on_sidebar_session_selected(self, message: Sidebar.SessionSelected) -> None:
         self.run_worker(self.open_session(message.session))
@@ -272,6 +319,55 @@ class CodexTuiApp(App[None]):
 
     async def _interrupt_turn(self) -> None:
         await self.runner.interrupt()
+
+    def action_quick_switch(self) -> None:
+        if self.turn_active:
+            return
+        sessions = [
+            self.overrides.apply(session)
+            for session in self.store.list_sessions()
+        ][:200]
+        if not sessions:
+            self.notify("No sessions yet", severity="warning")
+            return
+        self.push_screen(QuickSwitchScreen(sessions), self._on_quick_switch)
+
+    def _on_quick_switch(self, session: Session | None) -> None:
+        if session is None:
+            return
+        if session.project == self.current_project:
+            self.run_worker(self.open_session(session))
+            self._sync_sidebar_selection(session)
+        else:
+            self.run_worker(
+                self._project_selected(session.project, select_id=session.id)
+            )
+
+    def _session_index(self) -> int:
+        if self.current_session is None:
+            return -1
+        for index, session in enumerate(self._project_sessions):
+            if session.id == self.current_session.id:
+                return index
+        return -1
+
+    def action_next_session(self) -> None:
+        self._cycle_session(1)
+
+    def action_previous_session(self) -> None:
+        self._cycle_session(-1)
+
+    def _cycle_session(self, delta: int) -> None:
+        if not self._project_sessions:
+            return
+        current = self._session_index()
+        if current < 0:
+            target = 0
+        else:
+            target = (current + delta) % len(self._project_sessions)
+        session = self._project_sessions[target]
+        self.run_worker(self.open_session(session))
+        self._sync_sidebar_selection(session)
 
     @on(Input.Submitted, "#prompt-input")
     def _on_prompt_submitted(self, event: Input.Submitted) -> None:

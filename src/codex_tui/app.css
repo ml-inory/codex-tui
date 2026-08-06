@@ -114,7 +114,31 @@ Screen {
     border: round $primary-darken-1;
 }
 
+#quick-switch-dialog {
+    width: 80;
+    height: auto;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#quick-switch-input {
+    margin-bottom: 1;
+}
+
+#quick-switch-list {
+    height: 12;
+    border: round $primary-darken-1;
+}
+
 .model-label {
+    width: 100%;
+    overflow: hidden;
+    padding: 0 1;
+}
+
+.switch-label {
     width: 100%;
     overflow: hidden;
     padding: 0 1;
