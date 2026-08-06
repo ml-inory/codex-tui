@@ -12,10 +12,10 @@ dependencies = [
 [project.scripts]
 codex-tui = "codex_tui.__main__:main"
 
-# Keep the package index working even when the user's global uv config points
-# at an unreachable mirror (e.g. a 403-ing TUNA endpoint).
+# Keep the package index on the Aliyun mirror, matching the user's global uv
+# config, so dependency installs stay fast inside China.
 [[tool.uv.index]]
-url = "https://pypi.org/simple"
+url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
 
 [build-system]
