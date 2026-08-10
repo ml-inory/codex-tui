@@ -25,6 +25,10 @@ def test_missing_and_corrupt_files_are_tolerated(tmp_path: Path) -> None:
     bad.write_text("{not valid json", encoding="utf-8")
     assert Overrides.load(bad).data == {}
 
+    not_utf8 = tmp_path / "torn.json"
+    not_utf8.write_bytes(b"\xc3\x28")
+    assert Overrides.load(not_utf8).data == {}
+
     not_a_dict = tmp_path / "list.json"
     not_a_dict.write_text("[]", encoding="utf-8")
     assert Overrides.load(not_a_dict).data == {}

@@ -40,7 +40,7 @@ class Overrides:
             return overrides
         try:
             raw = json.loads(overrides.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return overrides
         if not isinstance(raw, dict):
             return overrides

@@ -34,7 +34,7 @@ class AppSettings:
             return settings
         try:
             raw = json.loads(settings.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return settings
         if isinstance(raw, dict):
             mode = raw.get("project_mode")

@@ -37,6 +37,24 @@ def test_parse_ignores_unknown_events_and_bad_lines(tmp_path: Path) -> None:
     assert session.model == "deepseek-v4-flash"
 
 
+def test_parse_tolerates_non_utf8_torn_transcript(tmp_path: Path) -> None:
+    """A transcript truncated mid-multibyte-char (or otherwise not UTF-8)
+    must degrade to an empty session instead of crashing the UI scan."""
+    path = make_session_file(tmp_path)
+    path.write_bytes(path.read_bytes() + b"\xc3\x28")
+
+    session = parse_session_file(path)
+
+    assert session.id == path.stem
+    assert session.messages == []
+
+    store = SessionStore(tmp_path)
+    sessions = store.list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0].id == path.stem
+    assert sessions[0].messages == []
+
+
 def test_parse_fallback_id_from_filename(tmp_path: Path) -> None:
     path = make_session_file(tmp_path, session_id="")
 

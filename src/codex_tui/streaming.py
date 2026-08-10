@@ -199,6 +199,8 @@ class AppServerClient:
         # Wake up any turn still waiting for notifications so it can fail
         # instead of blocking forever after the server died.
         self._notifications.put_nowait((_SERVER_EXITED, {}))
+        for queue in list(self._listeners.values()):
+            queue.put_nowait((_SERVER_EXITED, {}))
         exc = CodexRunError("codex app-server exited unexpectedly")
         pending = list(self._pending.values())
         self._pending.clear()

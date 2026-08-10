@@ -32,7 +32,7 @@ def load_model_catalog(path: Path | None = None) -> list[ModelEntry]:
     catalog_path = _catalog_path(path)
     try:
         raw = json.loads(catalog_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return []
     if not isinstance(raw, dict):
         return []

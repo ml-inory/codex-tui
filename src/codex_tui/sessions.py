@@ -121,8 +121,9 @@ def parse_session_file(path: Path) -> Session:
     session = Session(id="", path=path)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return session
+    except (OSError, UnicodeDecodeError):
+        # Unreadable or torn (mid-write) transcripts must not crash the UI.
+        lines = []
 
     for line in lines:
         try:

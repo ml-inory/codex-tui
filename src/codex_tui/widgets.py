@@ -182,7 +182,15 @@ class ChatLog(VerticalScroll):
         self._window = container._window
         signature = self._message_signature()
         container_signature = getattr(container, "_signature", None)
-        if container_signature != signature or not container.children:
+        stale_stream = (
+            self._pending_stream is not None
+            and self._pending_stream in container.children
+        )
+        if (
+            stale_stream
+            or container_signature != signature
+            or not container.children
+        ):
             await self._render_window()
         container._signature = signature
         self._rendered_signature = signature
@@ -291,6 +299,19 @@ class ChatLog(VerticalScroll):
         updates stay cheap.
         """
         container = await self._ensure_active_container()
+        if self._pending_stream is not None:
+            # Never leave a duplicate streaming row behind: drop any
+            # previously opened stream (it may belong to an earlier render
+            # of this or another session).
+            for widget in (self._pending_label, self._pending_stream):
+                if widget is not None:
+                    try:
+                        await widget.remove()
+                    except Exception:
+                        pass
+            self._pending_label = None
+            self._pending_stream = None
+            self._pending_text = ""
         label = Static("Codex", classes="assistant-label")
         await container.mount(label)
         self._pending_label = label

@@ -31,8 +31,10 @@ def build_codex_command(
             "--json",
             "--skip-git-repo-check",
         ]
+        # `codex exec resume` has no `-s/--sandbox` flag; the sandbox is
+        # passed as a config override instead (same value names).
         if sandbox:
-            command += ["-s", sandbox]
+            command += ["-c", f'sandbox_mode="{sandbox}"']
         if model:
             command += ["-m", model]
         command += [session_id, prompt]

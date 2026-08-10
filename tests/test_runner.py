@@ -39,14 +39,17 @@ def test_custom_binary_and_project_quoted_as_one_arg() -> None:
     assert "/proj with space" in command
 
 
-def test_sandbox_flag_added_for_new_and_resume() -> None:
+def test_sandbox_flag_added_for_new_and_config_override_for_resume() -> None:
     new_command = build_codex_command("/proj/a", "hi", sandbox="workspace-write")
     assert new_command[new_command.index("-s") + 1] == "workspace-write"
 
     resume_command = build_codex_command(
         "/proj/a", "hi", session_id="abc-123", sandbox="read-only"
     )
-    assert resume_command[resume_command.index("-s") + 1] == "read-only"
+    # `codex exec resume` rejects `-s`; the sandbox is passed as a config
+    # override with the same value names.
+    assert "-s" not in resume_command
+    assert 'sandbox_mode="read-only"' in resume_command
 
 
 def test_model_flag_added_for_new_and_resume() -> None:

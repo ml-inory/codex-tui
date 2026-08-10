@@ -8,7 +8,7 @@ from textual.widgets import Input, ListView, Markdown, Static
 from codex_tui.app import CodexTuiApp, run_cli
 from codex_tui.runner import CodexRunError
 from codex_tui.screens import ModelScreen, RenameScreen
-from codex_tui.widgets import ChatView, Sidebar, WatchPane
+from codex_tui.widgets import ChatLog, ChatView, Sidebar, WatchPane
 from tests.helpers import make_session_file
 from tests.helpers import make_many_message_session
 
@@ -181,6 +181,52 @@ class BackgroundFake:
         yield {"type": "turn.completed", "status": "completed", "thread_id": sid}
 
 
+class GatedStreamingFake:
+    """Interactive-like runner whose deltas are pushed per session."""
+
+    def __init__(self) -> None:
+        self.interactive = True
+        self.events: dict[str, asyncio.Queue] = {}
+        self.calls: list[dict] = []
+        self.started: asyncio.Event = asyncio.Event()
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def interrupt(self, thread_id: str | None = None) -> None:
+        pass
+
+    async def run_turn(
+        self,
+        *,
+        project: str,
+        prompt: str,
+        session_id: str | None = None,
+        model: str | None = None,
+    ):
+        self.calls.append(
+            {"project": project, "prompt": prompt, "session_id": session_id}
+        )
+        sid = session_id or "99999999-9999-9999-9999-999999999999"
+        self.events[sid] = asyncio.Queue()
+        self.started.set()
+        yield {"type": "thread.started", "thread_id": sid}
+        while True:
+            kind = await self.events[sid].get()
+            if kind == "delta1":
+                yield {"type": "agent_message.delta", "text": "Hel", "thread_id": sid}
+            elif kind == "delta2":
+                yield {"type": "agent_message.delta", "text": "lo", "thread_id": sid}
+            elif kind == "delta":
+                yield {"type": "agent_message.delta", "text": "XX", "thread_id": sid}
+            elif kind == "done":
+                yield {"type": "turn.completed", "status": "completed", "thread_id": sid}
+                break
+
+
 def test_app_mounts_empty_state(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = CodexTuiApp(sessions_dir=tmp_path)
@@ -318,6 +364,142 @@ def test_send_in_second_session_while_first_runs(tmp_path: Path) -> None:
             assert session_b in app._finished_sessions
             assert await _wait_until(pilot, lambda: app._completed_turns == 2)
             assert prompt_input.disabled is False
+
+    _run(scenario())
+
+
+def test_switch_away_and_back_does_not_duplicate_stream_rows(
+    tmp_path: Path,
+) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+    fake = GatedStreamingFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            prompt_input.value = "first"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: fake.started.is_set())
+            fake.events[session_a].put_nowait("delta1")
+            assert await _wait_until(
+                pilot,
+                lambda: app.query_one(ChatLog)._pending_text == "Hel",
+            )
+
+            # Browse another session and come back while the turn streams.
+            await app._project_selected("/proj/a", select_id=session_b)
+            await pilot.pause()
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+
+            chat_log = app.query_one(ChatLog)
+            container = chat_log._containers[session_a]
+            streaming_rows = [
+                c
+                for c in container.children
+                if "streaming" in str(c.classes)
+            ]
+            # Exactly one in-flight streaming row (the transcript's earlier
+            # replies are rendered separately); no stale duplicate rows.
+            assert len(streaming_rows) == 1
+            assert app.query_one(ChatLog)._pending_text == "Hel"
+
+            fake.events[session_a].put_nowait("delta2")
+            fake.events[session_a].put_nowait("done")
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            await pilot.pause(0.2)
+
+            # No plain-text streaming row survives the turn: the stream is
+            # replaced by the final markdown body.
+            streaming_rows = [
+                c
+                for c in container.children
+                if "streaming" in str(c.classes)
+            ]
+            assert streaming_rows == []
+
+    _run(scenario())
+
+
+def test_finishing_background_turn_keeps_viewed_stream_live(
+    tmp_path: Path,
+) -> None:
+    session_a = "11111111-1111-1111-1111-111111111111"
+    session_b = "22222222-2222-2222-2222-222222222222"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        timestamp="2026-08-07T03:00:00.000Z",
+        user_text="older",
+    )
+    make_session_file(
+        tmp_path,
+        session_id=session_b,
+        cwd="/proj/a",
+        timestamp="2026-08-07T04:00:00.000Z",
+        user_text="newer",
+    )
+    fake = GatedStreamingFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Start a turn on A.
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            prompt_input.value = "first"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: fake.started.is_set())
+            fake.started.clear()
+
+            # Switch to B and start a second turn; B is the viewed session.
+            await app._project_selected("/proj/a", select_id=session_b)
+            await pilot.pause()
+            prompt_input.focus()
+            prompt_input.value = "second"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, lambda: fake.started.is_set())
+
+            # A finishes in the background while B is still streaming.
+            fake.events[session_a].put_nowait("done")
+            assert await _wait_until(
+                pilot,
+                lambda: session_a not in app._active_sessions,
+            )
+            await pilot.pause(0.2)
+
+            # B's next delta must still render in the chat view.
+            fake.events[session_b].put_nowait("delta")
+            assert await _wait_until(
+                pilot,
+                lambda: app.query_one(ChatLog)._pending_text == "XX",
+            )
+            fake.events[session_b].put_nowait("done")
+            assert await _wait_until(pilot, lambda: not app.turn_active)
 
     _run(scenario())
 

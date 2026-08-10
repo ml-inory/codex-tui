@@ -323,15 +323,16 @@ class CodexTuiApp(App[None]):
         self.current_project = session.project
         await self.query_one(ChatView).show_session(session)
         was_finished = self._finished_sessions.pop(session.id, None) is not None
-        self._view_stream_key = None
-        if session.id in self._stream_buffers:
+        running = session.id in self._active_sessions
+        if session.id in self._stream_buffers or running:
             self._view_stream_key = session.id
+        else:
+            self._view_stream_key = None
+        if session.id in self._stream_buffers:
             chat_log = self.query_one(ChatLog)
             await chat_log.begin_assistant_message()
             await chat_log.update_assistant_message(self._stream_buffers[session.id])
-        await self.query_one(ChatView).set_running(
-            session.id in self._active_sessions
-        )
+        await self.query_one(ChatView).set_running(running)
         self._sync_sidebar_selection(session)
         if was_finished:
             await self._rerender_session_list_locked()
@@ -827,7 +828,7 @@ class CodexTuiApp(App[None]):
             self._active_new_views.discard(f"new:{project}")
             if self._view_stream_key in (stream_key, final_key):
                 await chat.finish_assistant()
-            self._view_stream_key = None
+                self._view_stream_key = None
             self._stream_buffers.pop(final_key, None)
             if (
                 session_id is None

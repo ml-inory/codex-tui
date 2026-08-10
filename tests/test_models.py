@@ -39,6 +39,10 @@ def test_missing_corrupt_and_non_dict_files_are_empty(tmp_path: Path) -> None:
     bad.write_text("{oops", encoding="utf-8")
     assert load_model_catalog(bad) == []
 
+    not_utf8 = tmp_path / "torn.json"
+    not_utf8.write_bytes(b"\xc3\x28")
+    assert load_model_catalog(not_utf8) == []
+
     not_a_dict = tmp_path / "list.json"
     not_a_dict.write_text("[]", encoding="utf-8")
     assert load_model_catalog(not_a_dict) == []

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -262,6 +263,28 @@ def test_interactive_runner_fails_when_server_exits_mid_turn() -> None:
         fake.push(_SERVER_EXITED, {})
         with pytest.raises(CodexRunError, match="exited during"):
             await asyncio.wait_for(task, timeout=5)
+
+    _run(scenario())
+
+
+def test_read_loop_wakes_listeners_when_server_exits() -> None:
+    """The real EOF path must wake subscribed turns, not just the unused
+    global notification queue (otherwise a dead server hangs the turn)."""
+
+    async def scenario() -> None:
+        client = AppServerClient()
+        client._proc = SimpleNamespace()
+
+        class FakeStdout:
+            async def read(self, size: int) -> bytes:
+                return b""  # immediate EOF: the server process died
+
+        client._proc.stdout = FakeStdout()
+        task = asyncio.create_task(client._read_loop())
+        queue = client.subscribe("thread-1")
+        method, _params = await asyncio.wait_for(queue.get(), timeout=2)
+        assert method == _SERVER_EXITED
+        await task
 
     _run(scenario())
 
