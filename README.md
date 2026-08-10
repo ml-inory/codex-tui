@@ -59,6 +59,30 @@ Or install it:
 uv sync && uv run codex-tui
 ```
 
+### Install on another machine
+
+`codex-tui` is a normal Python package, so any machine with `uv` can install it
+as a global command. One-liner (Linux/macOS, including WSL):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ml-inory/codex-tui/main/install.sh | bash
+```
+
+Or manually:
+
+```bash
+git clone https://github.com/ml-inory/codex-tui.git ~/codex-tui
+uv tool install --editable ~/codex-tui
+codex-tui
+```
+
+The script clones the repo to `~/codex-tui` (override with `--dir`, or use a
+non-editable copy with `--release`), installs the `codex-tui` command into
+uv's tool environment, and verifies it. Because the default install is
+editable, `git -C ~/codex-tui pull` updates the app. The `codex` CLI must be
+installed and logged in for turns to run; on Windows run the manual steps in
+PowerShell instead.
+
 Options:
 
 | Option | Description |

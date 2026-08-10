@@ -48,6 +48,29 @@ uv run codex-tui
 uv sync && uv run codex-tui
 ```
 
+### 在其他机器上安装
+
+`codex-tui` 就是普通 Python 包，任何装了 `uv` 的机器都能把它装成全局命令。
+一行命令安装（Linux / macOS，含 WSL）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ml-inory/codex-tui/main/install.sh | bash
+```
+
+或者手动安装：
+
+```bash
+git clone https://github.com/ml-inory/codex-tui.git ~/codex-tui
+uv tool install --editable ~/codex-tui
+codex-tui
+```
+
+脚本会把仓库 clone 到 `~/codex-tui`（可用 `--dir` 指定别的目录，`--release`
+则安装独立副本而非 editable），把 `codex-tui` 命令装进 uv 的工具环境并做
+校验。默认是 editable 安装，之后 `git -C ~/codex-tui pull` 就能更新程序。
+机器上需要装好并登录 `codex` CLI 才能跑回合；Windows 请在 PowerShell 里执行
+上面的手动步骤。
+
 选项：
 
 | 选项 | 说明 |
