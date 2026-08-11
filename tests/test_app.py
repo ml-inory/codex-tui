@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from textual.widgets import Input, ListView, Static
@@ -9,7 +10,13 @@ from textual.widgets import Input, ListView, Static
 from codex_tui.app import CodexTuiApp, resolve_sandbox, run_cli
 from codex_tui.runner import CodexRunError
 from codex_tui.screens import KeyHelpScreen, ModelScreen, RenameScreen
-from codex_tui.widgets import ChatLog, ChatView, Sidebar, WatchPane
+from codex_tui.widgets import (
+    ChatLog,
+    ChatView,
+    Sidebar,
+    WatchPane,
+    WorkingSpinner,
+)
 from tests.helpers import make_session_file
 from tests.helpers import make_many_message_session
 
@@ -1932,8 +1939,8 @@ def test_switching_projects_keeps_running_turn_alive(tmp_path: Path) -> None:
     _run(scenario())
 
 
-def test_working_indicator_spins_and_sidebar_marks_running(tmp_path: Path) -> None:
-    """A running turn shows a spinner and a sidebar running marker."""
+def test_working_indicator_blinks_and_sidebar_marks_running(tmp_path: Path) -> None:
+    """A running turn shows a blinking bullet and a sidebar running marker."""
     session_a = "11111111-1111-1111-1111-111111111111"
     make_session_file(
         tmp_path,
@@ -1956,13 +1963,14 @@ def test_working_indicator_spins_and_sidebar_marks_running(tmp_path: Path) -> No
                 pilot, lambda: session_a in app._active_sessions
             )
 
-            # The status line shows an animated working spinner.
+            # The status line shows the codex-style blinking working bullet.
             status = app.query_one("#chat-status", Static)
             assert "Codex is working…" in str(status.content)
-            frames = set(
-                "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-            )
-            assert any(ch in str(status.content) for ch in frames)
+            seen_bullets: set[str] = set()
+            for _ in range(10):
+                seen_bullets.add(str(status.content)[:1])
+                await pilot.pause(0.15)
+            assert seen_bullets == {"•", "◦"}
 
             # The sidebar marks the running session with a spinner too.
             sidebar = app.query_one(Sidebar)
@@ -1973,6 +1981,7 @@ def test_working_indicator_spins_and_sidebar_marks_running(tmp_path: Path) -> No
                 if "session-label" in str(s.classes) and "running" in str(s.classes)
             ]
             assert running_labels
+            frames = set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
             assert any(ch in running_labels[0] for ch in frames)
 
             fake.release_all.set()
@@ -1983,7 +1992,10 @@ def test_working_indicator_spins_and_sidebar_marks_running(tmp_path: Path) -> No
             )
             assert session_a not in sidebar._running_ids
 
-    _run(scenario())
+    with mock.patch.object(
+        WorkingSpinner, "_truecolor", staticmethod(lambda: False)
+    ):
+        _run(scenario())
 
 
 def test_exploring_and_edited_cells_render_codex_style(tmp_path: Path) -> None:

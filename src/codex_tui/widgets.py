@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import os
 import re
+import time
 from typing import Iterable
 from pathlib import Path
 
@@ -142,10 +145,20 @@ class BackgroundWaitStatus:
 
 
 class WorkingSpinner:
-    """Animated ``⠋ Codex is working…`` status line while a turn runs."""
+    """Blinking ``• Codex is working…`` status line while a turn runs.
 
+    Mirrors codex CLI's activity indicator: on truecolor terminals the bullet
+    breathes through a 2s brightness sweep; elsewhere it blinks ``•``/``◦``
+    every 600 ms like the background-terminal wait row.
+    """
+
+    # Sidebar running-session markers keep the braille frames.
     FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
     INTERVAL = 0.12
+    BREATH_SECONDS = 2.0
+    BLINK_INTERVAL = 0.6
+    _BREATH_DIM = "#484848"
+    _BREATH_BRIGHT = "#eeeeee"
 
     def __init__(
         self, widget: Widget, status_id: str, updates_title: bool = False
@@ -154,7 +167,7 @@ class WorkingSpinner:
         self._status_id = status_id
         self._updates_title = updates_title
         self._timer = None
-        self._frame = 0
+        self._started = time.monotonic()
 
     def start(self) -> None:
         """Show the spinner (idempotent; keeps its current phase)."""
@@ -174,12 +187,48 @@ class WorkingSpinner:
         self._widget.query_one(self._status_id, Static).update(fallback)
 
     def _tick(self) -> None:
-        self._frame = (self._frame + 1) % len(WorkingSpinner.FRAMES)
         self._render()
+
+    @staticmethod
+    def _truecolor() -> bool:
+        """Heuristic used by codex CLI: COLORTERM or TERM advertise 24-bit."""
+        colorterm = os.environ.get("COLORTERM") or ""
+        term = os.environ.get("TERM") or ""
+        return colorterm in ("truecolor", "24bit") or "direct" in term
+
+    @staticmethod
+    def _blend_hex(low: str, high: str, t: float) -> str:
+        """Linear RGB blend between two hex colors, ``t`` in 0..1."""
+
+        def rgb(hex_color: str) -> tuple[int, int, int]:
+            hex_color = hex_color.lstrip("#")
+            return tuple(
+                int(hex_color[i : i + 2], 16) for i in (0, 2, 4)
+            )
+
+        a, b = rgb(low), rgb(high)
+        blended = tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+        return f"#{blended[0]:02x}{blended[1]:02x}{blended[2]:02x}"
 
     def _render(self) -> None:
         text = Text()
-        text.append(WorkingSpinner.FRAMES[self._frame], style=f"bold {TOOL_RUNNING_COLOR}")
+        elapsed = time.monotonic() - self._started
+        if self._truecolor():
+            phase = (elapsed % self.BREATH_SECONDS) / self.BREATH_SECONDS
+            intensity = 0.5 * (1.0 + math.cos(2 * math.pi * phase))
+            bullet = "•"
+            bullet_style = (
+                f"bold {self._blend_hex(self._BREATH_DIM, self._BREATH_BRIGHT, intensity)}"
+            )
+        else:
+            on = int(elapsed / self.BLINK_INTERVAL) % 2 == 0
+            bullet = "•" if on else "◦"
+            bullet_style = (
+                f"bold {TOOL_RUNNING_COLOR}"
+                if on
+                else f"dim {TOOL_RUNNING_COLOR}"
+            )
+        text.append(bullet, style=bullet_style)
         text.append(" Codex is working…", style="bold")
         if self._updates_title:
             self._widget.app.sub_title = text.plain
