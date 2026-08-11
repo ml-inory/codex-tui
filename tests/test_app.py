@@ -3,14 +3,25 @@ import json
 import time
 from pathlib import Path
 
-from textual.widgets import Input, ListView, Markdown, Static
+import pytest
+from textual.widgets import Input, ListView, Static
 
-from codex_tui.app import CodexTuiApp, run_cli
+from codex_tui.app import CodexTuiApp, resolve_sandbox, run_cli
 from codex_tui.runner import CodexRunError
-from codex_tui.screens import ModelScreen, RenameScreen
+from codex_tui.screens import KeyHelpScreen, ModelScreen, RenameScreen
 from codex_tui.widgets import ChatLog, ChatView, Sidebar, WatchPane
 from tests.helpers import make_session_file
 from tests.helpers import make_many_message_session
+
+
+def _assistant_bodies(log):
+    """Assistant message bodies rendered by the lightweight renderer."""
+    return [
+        s
+        for s in log.query(Static)
+        if "assistant-body" in str(s.classes)
+        and "streaming" not in str(s.classes)
+    ]
 
 
 def _run(coro):
@@ -115,6 +126,71 @@ class StreamingFake:
         yield {"type": "agent_message.delta", "text": "Hel"}
         yield {"type": "agent_message.delta", "text": "lo "}
         yield {"type": "agent_message.delta", "text": "world"}
+        yield {"type": "turn.completed", "status": "completed"}
+
+
+class ToolStreamingFake:
+    """Streaming runner that emits tool activity between deltas."""
+
+    def __init__(self, sessions_dir: Path, session_id: str) -> None:
+        self.sessions_dir = sessions_dir
+        self.session_id = session_id
+        self.calls: list[dict] = []
+        self.interactive = True
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def interrupt(self) -> None:
+        pass
+
+    async def run_turn(
+        self,
+        *,
+        project: str,
+        prompt: str,
+        session_id: str | None = None,
+        model: str | None = None,
+    ):
+        self.calls.append(
+            {"project": project, "prompt": prompt, "session_id": session_id}
+        )
+        make_session_file(
+            self.sessions_dir,
+            session_id=session_id or self.session_id,
+            cwd=project,
+            timestamp="2026-08-07T04:00:00.000Z",
+            user_text=prompt,
+            assistant_text="Done",
+        )
+        yield {"type": "thread.started", "thread_id": "stream-tool-1"}
+        yield {
+            "type": "tool.started",
+            "tool": {
+                "id": "t0",
+                "kind": "commandExecution",
+                "label": "exec_command",
+                "detail": "ls -la",
+                "status": "running",
+                "exit_code": None,
+            },
+        }
+        yield {"type": "tool.output", "text": "file1\n"}
+        yield {
+            "type": "tool.completed",
+            "tool": {
+                "id": "t0",
+                "kind": "commandExecution",
+                "label": "exec_command",
+                "detail": "ls -la",
+                "status": "completed",
+                "exit_code": 0,
+            },
+        }
+        yield {"type": "agent_message.delta", "text": "Done"}
         yield {"type": "turn.completed", "status": "completed"}
 
 
@@ -830,9 +906,9 @@ def test_watch_pane_streams_background_turn(tmp_path: Path) -> None:
                 pilot, lambda: app._completed_turns == 1
             )
             watch_log = app.query_one("#watch-log")
-            markdowns = list(watch_log.query(Markdown))
+            bodies = _assistant_bodies(watch_log)
             assert any(
-                "done: ok" in (md.source or "") for md in markdowns
+                "done: ok" in str(s.content or "") for s in bodies
             )
             assert "Codex is working" not in str(
                 app.query_one("#watch-status", Static).content
@@ -951,6 +1027,43 @@ def test_send_prompt_starts_new_session_and_renders_reply(tmp_path: Path) -> Non
     _run(scenario())
 
 
+def test_slash_commands_are_handled_locally(tmp_path: Path) -> None:
+    """``/clear`` and friends never reach the model as a prompt."""
+    fake = BackgroundFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+
+            # /clear starts a fresh chat without touching the runner.
+            prompt_input.value = "/clear"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert fake.calls == []
+            assert app.current_session is None
+            assert "New session" in str(
+                app.query_one("#chat-header", Static).content
+            )
+
+            # Unknown commands are consumed with a warning, not sent.
+            prompt_input.value = "/definitely-not-a-command"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert fake.calls == []
+
+            # /help opens the key-help screen.
+            prompt_input.value = "/help"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, KeyHelpScreen)
+            assert fake.calls == []
+
+    _run(scenario())
+
+
 def test_send_prompt_streams_deltas_and_renders_markdown(tmp_path: Path) -> None:
     fake = StreamingFake(tmp_path, session_id="99999999-9999-9999-9999-999999999999")
 
@@ -964,10 +1077,10 @@ def test_send_prompt_streams_deltas_and_renders_markdown(tmp_path: Path) -> None
             assert await _wait_until(pilot, lambda: bool(fake.calls))
             assert await _wait_until(pilot, lambda: not app.turn_active)
             chat_log = app.query_one("#chat-log")
-            markdowns = list(chat_log.query(Markdown))
+            bodies = _assistant_bodies(chat_log)
             assert len(chat_log.visible_widgets()) == 4
-            assert len(markdowns) == 2
-            assert "Hello world" in (markdowns[0].source or "")
+            assert len(bodies) == 2
+            assert "Hello world" in str(bodies[0].content or "")
 
     _run(scenario())
 
@@ -989,10 +1102,10 @@ def test_broken_interactive_turn_falls_back_to_exec(tmp_path: Path) -> None:
             assert await _wait_until(pilot, lambda: bool(fallback.calls))
             assert await _wait_until(pilot, lambda: not app.turn_active)
             chat_log = app.query_one("#chat-log")
-            markdowns = list(chat_log.query(Markdown))
+            bodies = _assistant_bodies(chat_log)
             assert len(chat_log.visible_widgets()) == 4
-            assert len(markdowns) == 2
-            assert any("Hi from codex" in (md.source or "") for md in markdowns)
+            assert len(bodies) == 2
+            assert any("Hi from codex" in str(s.content or "") for s in bodies)
 
     _run(scenario())
 
@@ -1043,6 +1156,68 @@ def test_send_prompt_reports_error_and_reenables_input(tmp_path: Path) -> None:
             assert prompt_input.disabled is False
             status = app.query_one("#chat-status", Static)
             assert "codex exited with status 1" in str(status.content)
+
+    _run(scenario())
+
+
+def test_long_stream_renders_in_chunks(tmp_path: Path) -> None:
+    """Long replies stream through multiple bounded chunk widgets."""
+
+    class ChunkFake:
+        interactive = True
+
+        def __init__(self) -> None:
+            self.started: asyncio.Event = asyncio.Event()
+            self.release: asyncio.Event = asyncio.Event()
+            self.final_gate: asyncio.Event = asyncio.Event()
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def interrupt(self, thread_id: str | None = None) -> None:
+            pass
+
+        async def run_turn(self, **kwargs):
+            yield {"type": "thread.started", "thread_id": "chunk-1"}
+            self.started.set()
+            await self.release.wait()
+            big = "".join(f"piece{i:04d}-{'z'*500} " for i in range(100))
+            for index in range(0, len(big), 600):
+                yield {"type": "agent_message.delta", "text": big[index:index+600]}
+            await self.final_gate.wait()
+            yield {"type": "turn.completed", "status": "completed"}
+
+    fake = ChunkFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "go"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, fake.started.is_set)
+            fake.release.set()
+            assert await _wait_until(
+                pilot,
+                lambda: "piece0099" in app.query_one(ChatLog)._pending_text,
+            )
+            await pilot.pause()
+            chat = app.query_one(ChatLog)
+            chunks = [
+                s
+                for s in chat.query(Static)
+                if "streaming" in str(s.classes)
+            ]
+            assert len(chunks) >= 2
+            rendered = "".join(str(s.content) for s in chunks)
+            assert rendered == chat._pending_text
+            assert "piece0000" in rendered
+            fake.final_gate.set()
+            assert await _wait_until(pilot, lambda: app._completed_turns == 1)
 
     _run(scenario())
 
@@ -1413,6 +1588,581 @@ def test_run_cli_clean_trash(tmp_path: Path, monkeypatch, capsys) -> None:
     assert "Removed 1" in capsys.readouterr().out
 
 
+def test_resolve_sandbox_yolo_forces_danger_full_access(monkeypatch) -> None:
+    # Yolo wins over the environment default.
+    monkeypatch.setenv("CODEX_TUI_SANDBOX", "read-only")
+    assert resolve_sandbox(None, yolo=True, default="read-only") == (
+        "danger-full-access"
+    )
+    # Being explicit about the same value is fine.
+    assert resolve_sandbox(
+        "danger-full-access", yolo=True, default="workspace-write"
+    ) == "danger-full-access"
+    # An explicit conflicting --sandbox is rejected, not silently overridden.
+    with pytest.raises(ValueError, match="conflicts with --sandbox"):
+        resolve_sandbox("workspace-write", yolo=True, default="workspace-write")
+
+
+def test_resolve_sandbox_without_yolo_prefers_explicit_then_env_then_default(
+    monkeypatch,
+) -> None:
+    assert resolve_sandbox("read-only", yolo=False, default="workspace-write") == (
+        "read-only"
+    )
+    assert resolve_sandbox(None, yolo=False, default="read-only") == "read-only"
+    assert resolve_sandbox(None, yolo=False, default="workspace-write") == (
+        "workspace-write"
+    )
+
+
+def test_yolo_app_sets_danger_full_access_runner_and_header(tmp_path: Path) -> None:
+    make_session_file(tmp_path)
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, yolo=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.yolo is True
+            assert app.runner.sandbox == "danger-full-access"
+            assert app.query_one(ChatView).yolo is True
+            header = app.query_one("#chat-header", Static)
+            assert "YOLO" in str(header.content)
+
+    _run(scenario())
+
+
+def test_yolo_header_on_new_session_view(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, yolo=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            header = app.query_one("#chat-header", Static)
+            assert "YOLO" in str(header.content)
+
+    _run(scenario())
+
+
+def test_tool_calls_render_live_in_chat(tmp_path: Path) -> None:
+    class GatedToolFake:
+        interactive = True
+
+        def __init__(self) -> None:
+            self.started: asyncio.Event = asyncio.Event()
+            self.output_seen: asyncio.Event = asyncio.Event()
+            self.completed: asyncio.Event = asyncio.Event()
+            self.release: asyncio.Event = asyncio.Event()
+            self.release_final: asyncio.Event = asyncio.Event()
+            self.calls: list[dict] = []
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def interrupt(self) -> None:
+            pass
+
+        async def run_turn(
+            self,
+            *,
+            project: str,
+            prompt: str,
+            session_id: str | None = None,
+            model: str | None = None,
+        ):
+            self.calls.append(
+                {"project": project, "prompt": prompt, "session_id": session_id}
+            )
+            make_session_file(
+                tmp_path,
+                session_id=session_id or "tool-session-1",
+                cwd=project,
+                user_text=prompt,
+                assistant_text="Done",
+            )
+            yield {"type": "thread.started", "thread_id": "tool-1"}
+            yield {
+                "type": "tool.started",
+                "tool": {
+                    "id": "t0",
+                    "kind": "commandExecution",
+                    "label": "exec_command",
+                    "detail": "ls -la",
+                    "status": "running",
+                    "exit_code": None,
+                },
+            }
+            self.started.set()
+            await self.release.wait()
+            yield {"type": "tool.output", "text": "file1\n"}
+            yield {
+                "type": "tool.completed",
+                "tool": {
+                    "id": "t0",
+                    "kind": "commandExecution",
+                    "label": "exec_command",
+                    "detail": "ls -la",
+                    "status": "completed",
+                    "exit_code": 0,
+                },
+            }
+            self.completed.set()
+            await self.release_final.wait()
+            yield {"type": "agent_message.delta", "text": "Done"}
+            yield {"type": "turn.completed", "status": "completed"}
+
+    fake = GatedToolFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            prompt_input.value = "go"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, fake.started.is_set)
+            await pilot.pause()
+
+            chat_log = app.query_one(ChatLog)
+            labels = [
+                c
+                for c in chat_log.query(Static)
+                if "tool-label" in str(c.classes)
+            ]
+            assert len(labels) == 1
+            assert "• Running ls -la" in str(labels[0].content)
+            assert "running" in str(labels[0].classes)
+
+            fake.release.set()
+            assert await _wait_until(
+                pilot,
+                lambda: app.query_one(ChatLog)._pending_tool_text == "file1\n",
+            )
+            outputs = [
+                c
+                for c in chat_log.query(Static)
+                if "tool-output" in str(c.classes)
+            ]
+            assert outputs and "└ file1" in str(outputs[0].content)
+
+            # The completed marker flips to codex's green ``• Ran`` line.
+            assert await _wait_until(pilot, fake.completed.is_set)
+            await pilot.pause()
+            assert "• Ran ls -la" in str(labels[0].content)
+            assert "completed" in str(labels[0].classes)
+
+            fake.release_final.set()
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            await pilot.pause()
+            # Tool rows are live activity: after the turn they are replaced by
+            # the transcript render and do not linger in the visible chat.
+            chat_log = app.query_one(ChatLog)
+            container = chat_log._containers.get(chat_log._active_id or "")
+            leftover = [
+                c
+                for c in container.children
+                if "tool-label" in str(c.classes)
+            ]
+            assert leftover == []
+
+    _run(scenario())
+
+
+def test_background_terminal_waiting_blinks_in_status(tmp_path: Path) -> None:
+    """The codex-style ``Waiting for background terminal`` status blinks."""
+
+    class BackgroundFake:
+        interactive = True
+
+        def __init__(self) -> None:
+            self.started: asyncio.Event = asyncio.Event()
+            self.release_wait: asyncio.Event = asyncio.Event()
+            self.release_done: asyncio.Event = asyncio.Event()
+            self.release_final: asyncio.Event = asyncio.Event()
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def interrupt(self, thread_id: str | None = None) -> None:
+            pass
+
+        async def run_turn(self, **kwargs):
+            yield {"type": "thread.started", "thread_id": "bg-1"}
+            yield {
+                "type": "tool.started",
+                "tool": {
+                    "id": "t0",
+                    "kind": "commandExecution",
+                    "label": "exec_command",
+                    "detail": "sleep 30",
+                    "status": "running",
+                    "exit_code": None,
+                    "source": "unifiedExecInteraction",
+                    "process_id": "p0",
+                },
+            }
+            self.started.set()
+            await self.release_wait.wait()
+            yield {
+                "type": "tool.waiting",
+                "item_id": "t0",
+                "process_id": "p0",
+            }
+            await self.release_done.wait()
+            yield {
+                "type": "tool.completed",
+                "tool": {
+                    "id": "t0",
+                    "kind": "commandExecution",
+                    "label": "exec_command",
+                    "detail": "sleep 30",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "source": "unifiedExecInteraction",
+                    "process_id": "p0",
+                    "output": "",
+                },
+            }
+            await self.release_final.wait()
+            yield {"type": "turn.completed", "status": "completed"}
+
+    fake = BackgroundFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            prompt_input.value = "go"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, fake.started.is_set)
+            await pilot.pause()
+
+            status = app.query_one("#chat-status", Static)
+            assert "Codex is working…" in str(status.content)
+
+            fake.release_wait.set()
+            assert await _wait_until(
+                pilot,
+                lambda: "Waiting for background terminal"
+                in str(app.query_one("#chat-status", Static).content),
+            )
+            assert "• Waiting for background terminal" in str(status.content)
+            assert "sleep 30" in str(status.content)
+
+            # The bullet blinks every 600 ms, codex-style.
+            await pilot.pause(0.7)
+            assert "◦ Waiting for background terminal" in str(status.content)
+
+            # The background terminal resolved: the status clears and the row
+            # becomes codex's ``• Waited for background terminal`` cell.
+            fake.release_done.set()
+
+            def waited_label_text() -> str:
+                labels = [
+                    c
+                    for c in app.query_one(ChatLog).query(Static)
+                    if "tool-label" in str(c.classes)
+                ]
+                return str(labels[-1].content) if labels else ""
+
+            assert await _wait_until(
+                pilot, lambda: "Waited" in waited_label_text()
+            )
+            chat_log = app.query_one(ChatLog)
+            labels = [
+                c
+                for c in chat_log.query(Static)
+                if "tool-label" in str(c.classes)
+            ]
+            assert labels
+            assert "• Waited for background terminal" in str(labels[-1].content)
+            assert "sleep 30" in str(labels[-1].content)
+            assert "completed" in str(labels[-1].classes)
+            assert "Codex is working…" in str(status.content)
+
+            fake.release_final.set()
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+
+    _run(scenario())
+
+
+def test_switching_projects_keeps_running_turn_alive(tmp_path: Path) -> None:
+    """Switching projects must not cancel the worker of a running turn."""
+    session_a = "11111111-1111-1111-1111-111111111111"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        user_text="old conversation",
+    )
+    fake = BackgroundFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "do it"
+            await pilot.press("enter")
+            assert await _wait_until(
+                pilot, lambda: session_a in app._active_sessions
+            )
+            assert app.turn_active
+
+            # Switch to another project while the turn is still running.
+            await app._project_selected("/proj/b")
+            await pilot.pause()
+            assert session_a in app._active_sessions
+            assert app.turn_active
+
+            # The turn finishes normally once released.
+            fake.release_all.set()
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            assert await _wait_until(pilot, lambda: app._completed_turns == 1)
+
+    _run(scenario())
+
+
+def test_working_indicator_spins_and_sidebar_marks_running(tmp_path: Path) -> None:
+    """A running turn shows a spinner and a sidebar running marker."""
+    session_a = "11111111-1111-1111-1111-111111111111"
+    make_session_file(
+        tmp_path,
+        session_id=session_a,
+        cwd="/proj/a",
+        user_text="old conversation",
+    )
+    fake = BackgroundFake()
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app._project_selected("/proj/a", select_id=session_a)
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.value = "do it"
+            await pilot.press("enter")
+            assert await _wait_until(
+                pilot, lambda: session_a in app._active_sessions
+            )
+
+            # The status line shows an animated working spinner.
+            status = app.query_one("#chat-status", Static)
+            assert "Codex is working…" in str(status.content)
+            frames = set(
+                "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+            )
+            assert any(ch in str(status.content) for ch in frames)
+
+            # The sidebar marks the running session with a spinner too.
+            sidebar = app.query_one(Sidebar)
+            assert session_a in sidebar._running_ids
+            running_labels = [
+                str(s.content)
+                for s in sidebar.query(Static)
+                if "session-label" in str(s.classes) and "running" in str(s.classes)
+            ]
+            assert running_labels
+            assert any(ch in running_labels[0] for ch in frames)
+
+            fake.release_all.set()
+            assert await _wait_until(pilot, lambda: not app.turn_active)
+            assert await _wait_until(pilot, lambda: app._completed_turns == 1)
+            assert "Codex is working" not in str(
+                app.query_one("#chat-status", Static).content
+            )
+            assert session_a not in sidebar._running_ids
+
+    _run(scenario())
+
+
+def test_exploring_and_edited_cells_render_codex_style(tmp_path: Path) -> None:
+    """Read-only work shows ``Explored``, edits show ``Edited`` + colored diff."""
+
+    class ExploreEditFake:
+        interactive = True
+
+        def __init__(self) -> None:
+            self.exploring_started: asyncio.Event = asyncio.Event()
+            self.gate_explored: asyncio.Event = asyncio.Event()
+            self.gate_explored_seen: asyncio.Event = asyncio.Event()
+            self.edited_started: asyncio.Event = asyncio.Event()
+            self.gate_edited: asyncio.Event = asyncio.Event()
+            self.gate_done: asyncio.Event = asyncio.Event()
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def interrupt(self, thread_id: str | None = None) -> None:
+            pass
+
+        async def run_turn(self, **kwargs):
+            yield {"type": "thread.started", "thread_id": "ee-1"}
+            yield {
+                "type": "tool.started",
+                "tool": {
+                    "id": "e0",
+                    "kind": "commandExecution",
+                    "label": "exec_command",
+                    "detail": "rg exclusive app.py",
+                    "status": "running",
+                    "exit_code": None,
+                    "actions": [
+                        {
+                            "kind": "search",
+                            "command": "rg exclusive app.py",
+                            "query": "exclusive",
+                            "path": "app.py",
+                        },
+                        {
+                            "kind": "read",
+                            "command": "cat app.py",
+                            "name": "app.py",
+                            "path": "app.py",
+                        },
+                    ],
+                    "exploring": True,
+                },
+            }
+            self.exploring_started.set()
+            await self.gate_explored.wait()
+            yield {
+                "type": "tool.completed",
+                "tool": {
+                    "id": "e0",
+                    "kind": "commandExecution",
+                    "label": "exec_command",
+                    "detail": "rg exclusive app.py",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "actions": [
+                        {
+                            "kind": "search",
+                            "command": "rg exclusive app.py",
+                            "query": "exclusive",
+                            "path": "app.py",
+                        },
+                        {
+                            "kind": "read",
+                            "command": "cat app.py",
+                            "name": "app.py",
+                            "path": "app.py",
+                        },
+                    ],
+                    "exploring": True,
+                },
+            }
+            await self.gate_explored_seen.wait()
+            yield {
+                "type": "tool.started",
+                "tool": {
+                    "id": "f0",
+                    "kind": "fileChange",
+                    "label": "apply_patch",
+                    "detail": "/a.txt",
+                    "status": "running",
+                    "exit_code": None,
+                    "changes": [
+                        {
+                            "path": "/a.txt",
+                            "kind": "update",
+                            "diff": "@@ -1 +1,2 @@\n x = 1\n+y = 2\n",
+                        }
+                    ],
+                },
+            }
+            self.edited_started.set()
+            await self.gate_edited.wait()
+            yield {
+                "type": "tool.completed",
+                "tool": {
+                    "id": "f0",
+                    "kind": "fileChange",
+                    "label": "apply_patch",
+                    "detail": "/a.txt",
+                    "status": "completed",
+                    "exit_code": None,
+                    "changes": [
+                        {
+                            "path": "/a.txt",
+                            "kind": "update",
+                            "diff": "@@ -1 +1,2 @@\n x = 1\n+y = 2\n",
+                        }
+                    ],
+                },
+            }
+            await self.gate_done.wait()
+            yield {"type": "turn.completed", "status": "completed"}
+
+    fake = ExploreEditFake()
+
+    def label_texts(app) -> list:
+        return [
+            c
+            for c in app.query_one(ChatLog).query(Static)
+            if "tool-label" in str(c.classes)
+        ]
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, runner=fake)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt_input = app.query_one("#prompt-input", Input)
+            prompt_input.focus()
+            prompt_input.value = "go"
+            await pilot.press("enter")
+            assert await _wait_until(pilot, fake.exploring_started.is_set)
+            await pilot.pause()
+
+            labels = label_texts(app)
+            assert labels and "• Exploring" in str(labels[-1].content)
+            content = str(labels[-1].content)
+            assert "└ Search exclusive in app.py" in content
+            assert "Read app.py" in content
+            span_styles = [str(s.style) for s in labels[-1].content.spans]
+            assert any("#79C0FF" in style for style in span_styles)
+
+            fake.gate_explored.set()
+            assert await _wait_until(
+                pilot, lambda: "• Explored" in str(label_texts(app)[-1].content)
+            )
+            fake.gate_explored_seen.set()
+
+            assert await _wait_until(pilot, fake.edited_started.is_set)
+            await pilot.pause()
+            labels = label_texts(app)
+            assert "• Applying /a.txt" in str(labels[-1].content)
+
+            fake.gate_edited.set()
+            assert await _wait_until(
+                pilot,
+                lambda: "• Edited /a.txt (+1 -0)" in str(label_texts(app)[-1].content),
+            )
+            edited = str(label_texts(app)[-1].content)
+            assert "y = 2" in edited
+            span_styles = [str(s.style) for s in label_texts(app)[-1].content.spans]
+            assert any("#3FB950" in style for style in span_styles)
+            assert any("on #212922" in style for style in span_styles)
+
+            fake.gate_done.set()
+            assert await _wait_until(pilot, lambda: app._completed_turns == 1)
+
+    _run(scenario())
+
+
 def test_long_chat_is_windowed_and_f7_loads_earlier(tmp_path: Path) -> None:
     make_many_message_session(tmp_path, n=120)
 
@@ -1429,6 +2179,35 @@ def test_long_chat_is_windowed_and_f7_loads_earlier(tmp_path: Path) -> None:
             await pilot.pause()
             rendered = " ".join(str(s.content or "") for s in chat.query(Static))
             assert "问题0" in rendered
+
+    _run(scenario())
+
+
+def test_lazy_scroll_loads_earlier_messages(tmp_path: Path) -> None:
+    """Scrolling to the top auto-loads older messages without a full render."""
+    make_many_message_session(tmp_path, n=120)
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            chat = app.query_one(ChatLog)
+            container = chat._containers.get(chat._active_id or "")
+            assert container is not None
+            before = len(container.children)
+            assert before < 100  # lazy: a screenful, not all 120 messages
+
+            # Park at the top; the poll timer prepends older messages.
+            container.release_anchor()
+            container.scroll_to(y=0, animate=False, immediate=True)
+            await pilot.pause()
+            assert container.scroll_y <= 60
+            await chat._lazy_check()
+            await pilot.pause()
+            after = len(container.children)
+            assert after > before
+            rendered = " ".join(str(s.content or "") for s in chat.query(Static))
+            assert "回答119" in rendered  # newest still present
 
     _run(scenario())
 
@@ -1591,7 +2370,7 @@ def test_selecting_session_renders_conversation(tmp_path: Path) -> None:
             chat_log = app.query_one("#chat-log")
             statics = list(chat_log.query(Static))
             assert any("What is 2+2?" in str(s.content or "") for s in statics)
-            assert len(list(chat_log.query(Markdown))) == 1
+            assert len(_assistant_bodies(chat_log)) == 1
             assert app.current_session is not None
             assert app.current_session.id == "11111111-1111-1111-1111-111111111111"
 

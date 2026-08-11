@@ -21,6 +21,9 @@ from typing import Any
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
 DEFAULT_CODEX_TUI_HOME = Path.home() / ".codex-tui"
 TEXT_ITEM_TYPES = ("input_text", "output_text", "text")
+# Metadata scans stop after this many lines / bytes; titles degrade gracefully.
+_META_LINE_LIMIT = 300
+_META_BYTE_LIMIT = 128 * 1024
 
 # System-injected user messages that carry no user intent.
 INJECTED_PREFIXES: tuple[str, ...] = (
@@ -161,6 +164,67 @@ def parse_session_file(path: Path) -> Session:
     return session
 
 
+def _parse_metadata(path: Path) -> Session:
+    """Read only the head of a transcript for sidebar display data.
+
+    Collects the session id/cwd/timestamp/model plus the first real user
+    question (for the title), so listing hundreds of sessions stays cheap
+    without parsing every message.
+    """
+    session = Session(id="", path=path)
+    try:
+        handle = path.open("r", encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return session
+    with handle:
+        for _line_no in range(_META_LINE_LIMIT):
+            try:
+                line = handle.readline()
+            except (OSError, UnicodeDecodeError):
+                break
+            if not line:
+                break
+            if len(line) > _META_BYTE_LIMIT:
+                break
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            payload = event.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            event_type = event.get("type")
+            if event_type == "session_meta":
+                session.id = (
+                    payload.get("session_id")
+                    or payload.get("id")
+                    or session.id
+                )
+                session.cwd = payload.get("cwd") or session.cwd
+                session.timestamp = payload.get("timestamp") or session.timestamp
+            elif event_type == "turn_context":
+                if payload.get("model"):
+                    session.model = payload["model"]
+            elif event_type == "response_item":
+                if session.messages:
+                    continue
+                if payload.get("type") == "message" and payload.get("role") == "user":
+                    content = _extract_text(payload.get("content"))
+                    if content and not is_injected_message(content):
+                        session.messages.append(
+                            Message(
+                                role="user",
+                                content=content,
+                                item_id=payload.get("id"),
+                            )
+                        )
+    if not session.id:
+        session.id = path.stem
+    return session
+
+
 def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", str(DEFAULT_CODEX_HOME)))
 
@@ -179,8 +243,10 @@ class SessionStore:
     ) -> None:
         self.sessions_dir = sessions_dir or _codex_home() / "sessions"
         self.trash_dir = trash_dir or _codex_tui_home() / "trash"
-        # Parsed sessions keyed by (mtime_ns, size) so repeated scans stay cheap.
+        # Full transcripts and head-only metadata, keyed by (mtime_ns, size) so
+        # repeated scans stay cheap. Listing only touches the metadata tier.
         self._cache: dict[str, tuple[tuple[int, int], Session]] = {}
+        self._meta_cache: dict[str, tuple[tuple[int, int], Session]] = {}
 
     def list_sessions(self) -> list[Session]:
         """All sessions, newest first."""
@@ -190,14 +256,33 @@ class SessionStore:
         for path in sorted(self.sessions_dir.rglob("*.jsonl")):
             if path.is_relative_to(self.trash_dir):
                 continue
-            session = self._cached_session(path)
+            session = self._meta_session(path)
             if session.id:
                 sessions.append(session)
         sessions.sort(key=lambda s: s.timestamp, reverse=True)
         return sessions
 
+    def get_full(self, session: Session) -> Session:
+        """Upgrade a metadata session to the fully parsed transcript."""
+        return self._cached_session(session.path)
+
+    def _meta_session(self, path: Path) -> Session:
+        """Head-only parse (id/cwd/timestamp/model/first real question)."""
+        try:
+            stat = path.stat()
+            key = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            self._meta_cache.pop(str(path), None)
+            return Session(id="", path=path)
+        cached = self._meta_cache.get(str(path))
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        session = _parse_metadata(path)
+        self._meta_cache[str(path)] = (key, session)
+        return session
+
     def _cached_session(self, path: Path) -> Session:
-        """Parse only when the file changed since the last scan."""
+        """Full parse, only when the file changed since the last scan."""
         try:
             stat = path.stat()
             key = (stat.st_mtime_ns, stat.st_size)
@@ -226,6 +311,16 @@ class SessionStore:
         """Sessions belonging to one project, newest first."""
         return [s for s in self.list_sessions() if s.project == project]
 
+    @staticmethod
+    def projects_from(sessions: list[Session]) -> list[str]:
+        """Distinct projects in scan order, so callers can avoid re-scanning."""
+        projects: list[str] = []
+        for session in sessions:
+            project = session.project
+            if project not in projects:
+                projects.append(project)
+        return projects
+
     def delete_session(self, session: Session) -> None:
         """Move a session transcript to the trash dir (recoverable delete)."""
         if not session.path.is_file():
@@ -234,6 +329,7 @@ class SessionStore:
         destination = self.trash_dir / f"{session.id}-{session.path.name}"
         shutil.move(str(session.path), str(destination))
         self._cache.pop(str(session.path), None)
+        self._meta_cache.pop(str(session.path), None)
 
     def clean_trash(self) -> int:
         """Permanently delete trashed transcripts; return the number removed."""

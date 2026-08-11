@@ -40,6 +40,10 @@ Screen {
     color: #FEA62B;
 }
 
+.session-label.running {
+    color: #3FB950;
+}
+
 #sidebar-hint {
     color: #8E8E8E;
     margin-top: 1;
@@ -128,6 +132,27 @@ Screen {
 }
 
 .assistant-body.streaming {
+    padding-bottom: 1;
+}
+
+.tool-label {
+    text-style: bold;
+    color: #FEA62B;
+    padding-top: 1;
+}
+
+.tool-label.completed {
+    color: #3FB950;
+}
+
+.tool-label.failed {
+    color: #F85149;
+}
+
+.tool-output {
+    width: 1fr;
+    color: #8B949E;
+    text-style: dim;
     padding-bottom: 1;
 }
 

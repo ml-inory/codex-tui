@@ -211,6 +211,275 @@ def test_interactive_runner_streams_deltas_and_completes() -> None:
     _run(scenario())
 
 
+def test_interactive_runner_streams_tool_activity() -> None:
+    fake = FakeAppServer()
+
+    async def scenario() -> None:
+        runner = InteractiveCodexRunner(client_factory=fake.attach)
+        events: list[dict] = []
+
+        async def collect() -> None:
+            events.extend(
+                [
+                    event
+                    async for event in runner.run_turn(
+                        project="/proj/x", prompt="hi", session_id=None, model=None
+                    )
+                ]
+            )
+
+        task = asyncio.create_task(collect())
+        await _wait_for_listener(fake, "thread-1")
+        fake.push(
+            "item/started",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "i0",
+                    "type": "commandExecution",
+                    "command": "bash -lc 'ls -la'",
+                    "source": "unifiedExecInteraction",
+                    "processId": "p0",
+                    "commandActions": [
+                        {
+                            "type": "read",
+                            "command": "ls -la",
+                            "name": ".",
+                            "path": "/proj/x",
+                        }
+                    ],
+                    "status": "inProgress",
+                },
+            },
+        )
+        fake.push(
+            "item/commandExecution/outputDelta",
+            {"threadId": "thread-1", "turnId": "turn-1", "itemId": "i0", "delta": "file1\n"},
+        )
+        fake.push(
+            "item/completed",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "i0",
+                    "type": "commandExecution",
+                    "command": "bash -lc 'ls -la'",
+                    "source": "unifiedExecInteraction",
+                    "processId": "p0",
+                    "commandActions": [
+                        {
+                            "type": "read",
+                            "command": "ls -la",
+                            "name": ".",
+                            "path": "/proj/x",
+                        }
+                    ],
+                    "status": "completed",
+                    "exitCode": 0,
+                },
+            },
+        )
+        fake.push(
+            "item/started",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "i1",
+                    "type": "fileChange",
+                    "changes": [
+                        {
+                            "path": "/a.txt",
+                            "kind": "update",
+                            "diff": "@@ -1 +1 @@\n-old\n+new\n",
+                        }
+                    ],
+                    "status": "inProgress",
+                },
+            },
+        )
+        fake.push(
+            "item/completed",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "i1",
+                    "type": "fileChange",
+                    "changes": [
+                        {
+                            "path": "/a.txt",
+                            "kind": "update",
+                            "diff": "@@ -1 +1 @@\n-old\n+new\n",
+                        }
+                    ],
+                    "status": "completed",
+                },
+            },
+        )
+        fake.push(
+            "turn/completed",
+            {"threadId": "thread-1", "turnId": "turn-1", "status": "completed"},
+        )
+        await asyncio.wait_for(task, timeout=5)
+
+        started = [e for e in events if e["type"] == "tool.started"]
+        assert len(started) == 2
+        assert started[0]["tool"] == {
+            "id": "i0",
+            "kind": "commandExecution",
+            "label": "exec_command",
+            "detail": "ls -la",
+            "status": "running",
+            "exit_code": None,
+            "source": "unifiedExecInteraction",
+            "process_id": "p0",
+            "actions": [
+                {
+                    "kind": "read",
+                    "command": "ls -la",
+                    "name": ".",
+                    "query": None,
+                    "path": "/proj/x",
+                }
+            ],
+            "exploring": True,
+        }
+        assert started[1]["tool"]["label"] == "apply_patch"
+        assert started[1]["tool"]["detail"] == "/a.txt"
+        assert started[1]["tool"]["changes"] == [
+            {
+                "path": "/a.txt",
+                "kind": "update",
+                "diff": "@@ -1 +1 @@\n-old\n+new\n",
+            }
+        ]
+
+        output = [e for e in events if e["type"] == "tool.output"]
+        assert output == [
+            {
+                "type": "tool.output",
+                "text": "file1\n",
+                "turn_id": "turn-1",
+                "thread_id": "thread-1",
+            }
+        ]
+
+        completed = [e for e in events if e["type"] == "tool.completed"]
+        assert len(completed) == 2
+        assert completed[0]["tool"]["status"] == "completed"
+        assert completed[0]["tool"]["exit_code"] == 0
+        assert completed[1]["tool"]["status"] == "completed"
+        assert events[-1]["type"] == "turn.completed"
+
+    _run(scenario())
+
+
+def test_terminal_interaction_notifications_surface_waiting_state() -> None:
+    """Empty-stdin terminal interactions become ``tool.waiting`` events."""
+    fake = FakeAppServer()
+
+    async def scenario() -> None:
+        runner = InteractiveCodexRunner(client_factory=fake.attach)
+        events: list[dict] = []
+
+        async def collect() -> None:
+            events.extend(
+                [
+                    event
+                    async for event in runner.run_turn(
+                        project="/proj/x", prompt="hi", session_id=None, model=None
+                    )
+                ]
+            )
+
+        task = asyncio.create_task(collect())
+        await _wait_for_listener(fake, "thread-1")
+        fake.push(
+            "item/started",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "i0",
+                    "type": "commandExecution",
+                    "command": "bash -lc 'sleep 30'",
+                    "source": "unifiedExecInteraction",
+                    "processId": "p0",
+                    "status": "inProgress",
+                },
+            },
+        )
+        fake.push(
+            "item/commandExecution/terminalInteraction",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "i0",
+                "processId": "p0",
+                "stdin": "",
+            },
+        )
+        fake.push(
+            "item/commandExecution/terminalInteraction",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "i0",
+                "processId": "p0",
+                "stdin": "yes\n",
+            },
+        )
+        fake.push(
+            "item/completed",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "i0",
+                    "type": "commandExecution",
+                    "command": "bash -lc 'sleep 30'",
+                    "source": "unifiedExecInteraction",
+                    "processId": "p0",
+                    "status": "completed",
+                    "exitCode": 0,
+                },
+            },
+        )
+        fake.push(
+            "turn/completed",
+            {"threadId": "thread-1", "turnId": "turn-1", "status": "completed"},
+        )
+        await asyncio.wait_for(task, timeout=5)
+
+        assert [e for e in events if e["type"] == "tool.waiting"] == [
+            {
+                "type": "tool.waiting",
+                "item_id": "i0",
+                "process_id": "p0",
+                "turn_id": "turn-1",
+                "thread_id": "thread-1",
+            }
+        ]
+        assert [e for e in events if e["type"] == "tool.interaction"] == [
+            {
+                "type": "tool.interaction",
+                "text": "yes\n",
+                "item_id": "i0",
+                "process_id": "p0",
+                "turn_id": "turn-1",
+                "thread_id": "thread-1",
+            }
+        ]
+        completed = [e for e in events if e["type"] == "tool.completed"]
+        assert completed[0]["tool"]["source"] == "unifiedExecInteraction"
+        assert completed[0]["tool"]["process_id"] == "p0"
+
+    _run(scenario())
+
+
 def test_interactive_runner_resumes_existing_session() -> None:
     fake = FakeAppServer()
 

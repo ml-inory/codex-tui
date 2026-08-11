@@ -88,6 +88,7 @@ Options:
 | Option | Description |
 | --- | --- |
 | `--sandbox read-only\|workspace-write\|danger-full-access` | Sandbox passed to `codex exec`; default `workspace-write` (edits allowed inside the selected project). Overridable via `CODEX_TUI_SANDBOX`. |
+| `--yolo` | Codex yolo mode: bypass all approval prompts and disable sandboxing (equivalent to `codex --dangerously-bypass-approvals-and-sandbox`). Forces the sandbox to `danger-full-access` and conflicts with an explicit `--sandbox` value. EXTREMELY DANGEROUS. |
 | `--codex-bin PATH` | Path to the codex binary (default: `codex`). |
 | `--mode auto\|interactive\|exec` | Turn backend: `interactive` streams deltas via `codex app-server`; `exec` uses one-shot `codex exec --json`. Default `auto` (interactive, falling back to exec if the app-server is unavailable). Overridable via `CODEX_TUI_MODE`. |
 | `--sessions-dir PATH` | Override the sessions directory (default: `$CODEX_HOME/sessions`). |
@@ -118,6 +119,21 @@ Options:
 | `Esc` | Interrupt the running turn |
 | `q` | Quit (confirm with `Ctrl+Q`) |
 
+## Slash commands
+
+The prompt supports codex-style slash commands, handled locally instead of
+being sent to the model:
+
+| Command | Effect |
+| --- | --- |
+| `/clear`, `/new` | Clear the chat and start a fresh conversation (the old session stays in the sidebar) |
+| `/help` | Open the keyboard shortcut reference |
+| `/model` | Pick the session model |
+| `/rename` | Rename the current session |
+| `/quit`, `/exit` | Quit the TUI |
+
+Unrecognized commands show an `unknown command` warning and are ignored.
+
 Session titles and model choices are stored in `~/.codex-tui/overrides.json`;
 the codex session files themselves are never modified. Deleted sessions are
 moved to `~/.codex-tui/trash` instead of being erased.
@@ -136,7 +152,37 @@ moved to `~/.codex-tui/trash` instead of being erased.
   the turn finishes.
 - Several sessions can run turns at the same time; each one subscribes to its
   own thread's notifications, and streamed text is buffered per session so a
-  background reply never leaks into the view you are currently looking at.
+  background reply never leaks into the view you are currently looking at, and
+  switching projects or sessions never stops a running turn.
+  Tool activity is streamed live into the chat while a turn runs: every
+  `exec_command` and file edit shows as a codex-style status line
+  (`• Running <command>` → `• Ran <command>`, green on success / red on
+  failure), and command output appears dimmed under the row as it is produced,
+  so you can watch Codex work instead of waiting on a spinner. When the model
+  is waiting on a background terminal, a blinking `• Waiting for background
+  terminal · <command>` status line is shown, just like the codex CLI. Read-only
+  exploration collapses into a colored `• Explored` cell (`└ Search <query> in
+  <path>` / `Read <file>`, cyan action names), and file edits render as
+  `• Edited <file> (+N -M)` with the diff preview colored green for added and
+  red for removed lines, exactly like codex.
+  While a turn runs, the chat status line shows an animated spinner
+  (`⠋ Codex is working…`) and the session gets a spinning marker in the
+  sidebar, so it is obvious the agent is working even from another view.
+  Streamed text and tool output are coalesced into ~25 fps flushes (short
+  replies still paint instantly), and long replies stream through bounded
+  chunk widgets so each frame only re-renders a small tail instead of the
+  whole message; the terminal title also shows the activity spinner while
+  working. Assistant messages are rendered by a tiny built-in Markdown
+  renderer (headings, bold/italic, inline code, fenced code blocks, lists,
+  quotes) instead of a full CommonMark parser, so opening transcripts is
+  ~10x faster.
+  Switching sessions and projects is kept responsive too: session scanning
+  runs off the UI thread, the sidebar list is rebuilt in one batch, and long
+  transcripts are rendered lazily — only the visible tail is built when a
+  session opens, older messages are prepended automatically as you scroll up,
+  and `F7` jumps to the earliest message. Sidebar listing reads only session
+  metadata (full transcripts are parsed on demand), so switching stays fast
+  even with hundreds of large sessions.
   Completion of a background turn is reported with an in-app notification, a
   sidebar marker, and the `Ctrl+G` jump shortcut.
 - If `codex app-server` is unavailable or a turn fails, the TUI falls back to
@@ -149,7 +195,8 @@ moved to `~/.codex-tui/trash` instead of being erased.
   non-interactive `codex exec`), so there are no in-TUI approval prompts: the
   `--sandbox` value controls what Codex may do.
   `workspace-write` allows file changes inside the selected project;
-  `read-only` forbids writes; `danger-full-access` allows anything.
+  `read-only` forbids writes; `danger-full-access` allows anything. `--yolo`
+  is shorthand for the latter, with approvals already disabled.
 - If the `codex` binary is missing, sending a message shows an in-app error
   instead of crashing.
 - `codex app-server` is an experimental CLI surface; if a future codex release

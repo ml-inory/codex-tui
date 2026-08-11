@@ -92,13 +92,19 @@ class CodexTuiApp(App[None]):
         model_catalog_path: Path | None = None,
         fallback_runner: CodexRunner | None = None,
         settings_path: Path | None = None,
+        yolo: bool = False,
     ) -> None:
         super().__init__()
         self.store = SessionStore(sessions_dir, trash_dir)
         self.overrides = Overrides.load(overrides_path)
         self.models = load_model_catalog(model_catalog_path)
+        self.yolo = yolo
         self.runner = runner or CodexRunner(
-            sandbox=os.environ.get("CODEX_TUI_SANDBOX", "workspace-write")
+            sandbox=(
+                "danger-full-access"
+                if yolo
+                else os.environ.get("CODEX_TUI_SANDBOX", "workspace-write")
+            )
         )
         self.fallback_runner = fallback_runner
         self.settings = AppSettings.load(settings_path)
@@ -148,6 +154,15 @@ class CodexTuiApp(App[None]):
         # Fixed dark palette so every terminal/machine renders the same colors
         # (the app CSS uses explicit hex values, no theme tokens).
         self.theme = "textual-dark"
+        chat_view = self.query_one(ChatView)
+        chat_view.yolo = self.yolo
+        if self.yolo:
+            self.notify(
+                "YOLO 模式：免审批 + 无沙箱（danger-full-access），"
+                "Codex 可以不受限制地执行任意命令",
+                severity="warning",
+                timeout=8,
+            )
         self.query_one(Sidebar).display = self.settings.sidebar_visible
         self.query_one(WatchPane).display = False
         await self._backfill_titles()
@@ -179,7 +194,8 @@ class CodexTuiApp(App[None]):
     async def _backfill_titles(self) -> None:
         """Persist meaningful titles for sessions whose first user message was
         system-injected context (idempotent; skipped once an override exists)."""
-        for session in self.store.list_sessions():
+        for meta in await self._list_sessions():
+            session = self.store.get_full(meta)
             if session.title_override:
                 continue
             first_user = next(
@@ -286,8 +302,16 @@ class CodexTuiApp(App[None]):
         async with self._view_lock:
             await self._refresh_sessions_locked()
 
+    async def _list_sessions(self) -> list[Session]:
+        """Scan session files off the UI thread so switching stays responsive."""
+        return await asyncio.to_thread(self.store.list_sessions)
+
+    async def _sessions_for_project(self, project: str) -> list[Session]:
+        return await asyncio.to_thread(self.store.sessions_for_project, project)
+
     async def _refresh_sessions_locked(self) -> None:
-        projects = self.store.list_projects()
+        all_sessions = await self._list_sessions()
+        projects = SessionStore.projects_from(all_sessions)
         sidebar = self.query_one(Sidebar)
         await sidebar.set_projects(projects, self.settings.project_mode)
         if not projects:
@@ -300,11 +324,17 @@ class CodexTuiApp(App[None]):
             return
         if self.current_project is None or self.current_project not in projects:
             self.current_project = projects[0]
-        sessions = self.store.sessions_for_project(self.current_project)
-        for index, session in enumerate(sessions):
-            sessions[index] = self.overrides.apply(session)
+        sessions = [
+            self.overrides.apply(session)
+            for session in all_sessions
+            if session.project == self.current_project
+        ]
         self._project_sessions = sessions
-        await sidebar.set_sessions(sessions, finished=set(self._finished_sessions))
+        await sidebar.set_sessions(
+            sessions,
+            finished=set(self._finished_sessions),
+            running=set(self._active_sessions),
+        )
         if sessions:
             await self._open_preferred_session_locked(sessions)
         else:
@@ -318,7 +348,7 @@ class CodexTuiApp(App[None]):
 
     async def _open_session_locked(self, session: Session) -> None:
         focus_input = self.focused is self.query_one("#prompt-input")
-        session = self.overrides.apply(session)
+        session = self.overrides.apply(self.store.get_full(session))
         self.current_session = session
         self.current_project = session.project
         await self.query_one(ChatView).show_session(session)
@@ -340,7 +370,13 @@ class CodexTuiApp(App[None]):
             self.set_focus(self.query_one(Input))
 
     def on_sidebar_project_selected(self, message: Sidebar.ProjectSelected) -> None:
-        self.run_worker(self._project_selected(message.project), exclusive=True)
+        # ``exclusive`` must only cancel other view switches, never the turn
+        # workers (they share the default group and would be killed otherwise).
+        self.run_worker(
+            self._project_selected(message.project),
+            exclusive=True,
+            group="view-switch",
+        )
 
     async def _project_selected(
         self, project: str, select_id: str | None = None
@@ -352,12 +388,14 @@ class CodexTuiApp(App[None]):
         self, project: str, select_id: str | None = None
     ) -> None:
         self.current_project = project
-        sessions = self.store.sessions_for_project(project)
+        sessions = await self._sessions_for_project(project)
         for index, session in enumerate(sessions):
             sessions[index] = self.overrides.apply(session)
         self._project_sessions = sessions
         await self.query_one(Sidebar).set_sessions(
-            sessions, finished=set(self._finished_sessions)
+            sessions,
+            finished=set(self._finished_sessions),
+            running=set(self._active_sessions),
         )
         if sessions:
             preferred = select_id
@@ -414,18 +452,18 @@ class CodexTuiApp(App[None]):
             return
         sessions = [
             self.overrides.apply(session)
-            for session in self.store.sessions_for_project(self.current_project)
+            for session in await self._sessions_for_project(self.current_project)
         ]
         self._project_sessions = sessions
         await self.query_one(Sidebar).set_sessions(
-            sessions, finished=set(self._finished_sessions)
+            sessions,
+            finished=set(self._finished_sessions),
+            running=set(self._active_sessions),
         )
 
     async def _mark_finished(self, session_id: str) -> None:
-        session = next(
-            (s for s in self.store.list_sessions() if s.id == session_id),
-            None,
-        )
+        sessions = await self._list_sessions()
+        session = next((s for s in sessions if s.id == session_id), None)
         title = session.title if session is not None else session_id[:8]
         was_current = (
             self.current_session is not None
@@ -471,10 +509,10 @@ class CodexTuiApp(App[None]):
     async def _interrupt_turn(self, session_id: str) -> None:
         await self.runner.interrupt(thread_id=session_id)
 
-    def action_quick_switch(self) -> None:
+    async def action_quick_switch(self) -> None:
         sessions = [
             self.overrides.apply(session)
-            for session in self.store.list_sessions()
+            for session in await self._list_sessions()
         ][:200]
         if not sessions:
             self.notify("No sessions yet", severity="warning")
@@ -515,14 +553,14 @@ class CodexTuiApp(App[None]):
             timeout=3,
         )
 
-    def action_toggle_split(self) -> None:
+    async def action_toggle_split(self) -> None:
         """Open (pick a session) or close the split watch pane."""
         if self.query_one(WatchPane).display:
             self.run_worker(self._close_watch_pane())
             return
         sessions = [
             self.overrides.apply(session)
-            for session in self.store.list_sessions()
+            for session in await self._list_sessions()
         ][:200]
         if not sessions:
             self.notify("No sessions yet", severity="warning")
@@ -535,7 +573,7 @@ class CodexTuiApp(App[None]):
         self.run_worker(self._open_watch_pane(session))
 
     async def _open_watch_pane(self, session: Session) -> None:
-        session = self.overrides.apply(session)
+        session = self.overrides.apply(self.store.get_full(session))
         async with self._view_lock:
             watch = self.query_one(WatchPane)
             watch.display = True
@@ -585,17 +623,15 @@ class CodexTuiApp(App[None]):
         watched = self._watch_session
         if watched is None or not self.query_one(WatchPane).display:
             return
-        fresh = next(
-            (s for s in self.store.list_sessions() if s.id == watched.id),
-            None,
-        )
+        sessions = await self._list_sessions()
+        fresh = next((s for s in sessions if s.id == watched.id), None)
         watch = self.query_one(WatchPane)
         if fresh is None:
             self._watch_session = None
             watch.display = False
             await watch.show_session(None)
             return
-        fresh = self.overrides.apply(fresh)
+        fresh = self.overrides.apply(self.store.get_full(fresh))
         self._watch_session = fresh
         await watch.show_session(fresh)
         await watch.set_running(fresh.id in self._active_sessions)
@@ -650,16 +686,14 @@ class CodexTuiApp(App[None]):
         session = self._project_sessions[target]
         self.run_worker(self.open_session(session))
 
-    def action_jump_finished(self) -> None:
+    async def action_jump_finished(self) -> None:
         """Jump to the most recently finished background session."""
         if not self._finished_sessions:
             self.notify("没有已完成的会话", severity="warning")
             return
         session_id, title = next(reversed(self._finished_sessions.items()))
-        session = next(
-            (s for s in self.store.list_sessions() if s.id == session_id),
-            None,
-        )
+        sessions = await self._list_sessions()
+        session = next((s for s in sessions if s.id == session_id), None)
         if session is None:
             self._finished_sessions.pop(session_id, None)
             self.notify("该会话已不存在", severity="warning")
@@ -714,7 +748,37 @@ class CodexTuiApp(App[None]):
         prompt = event.value.strip()
         event.input.value = ""
         if prompt:
+            if prompt.startswith("/") and self._handle_slash_command(prompt):
+                return
             self.run_worker(self._send_prompt(prompt))
+
+    def _handle_slash_command(self, text: str) -> bool:
+        """Handle codex-style slash commands locally.
+
+        Returns ``True`` when the input was consumed as a command and must not
+        be sent to the model.
+        """
+        command, _, _arg = text.partition(" ")
+        command = command.lower()
+        if command in ("/clear", "/new"):
+            # codex's /clear starts a fresh chat; the old session stays on
+            # disk and remains reachable from the sidebar.
+            self.run_worker(self.action_new_session())
+            return True
+        if command == "/help":
+            self.action_show_key_help()
+            return True
+        if command == "/model":
+            self.action_pick_model()
+            return True
+        if command == "/rename":
+            self.action_rename_session()
+            return True
+        if command in ("/quit", "/exit"):
+            self.action_quit()
+            return True
+        self.notify(f"未知命令 {command}，试试 /help", severity="warning")
+        return True
 
     async def _send_prompt(self, prompt: str) -> None:
         project = self.current_project or str(Path.cwd())
@@ -744,6 +808,9 @@ class CodexTuiApp(App[None]):
             self._active_new_views.add(f"new:{project}")
         else:
             self._active_sessions.add(session_id)
+            self.query_one(Sidebar).set_running_sessions(
+                set(self._active_sessions)
+            )
 
         chat = self.query_one(ChatView)
         await chat.add_user_message(prompt)
@@ -769,6 +836,9 @@ class CodexTuiApp(App[None]):
                                     f"new:{project}"
                                 )
                                 self._active_sessions.add(thread_id)
+                                self.query_one(Sidebar).set_running_sessions(
+                                    set(self._active_sessions)
+                                )
                                 if self._view_stream_key == f"new:{project}":
                                     self._view_stream_key = thread_id
                         elif event_type == "agent_message.delta":
@@ -788,6 +858,67 @@ class CodexTuiApp(App[None]):
                                     await self.query_one(
                                         WatchPane
                                     ).append_assistant_delta(text)
+                        elif event_type == "tool.started":
+                            tool = event.get("tool") or {}
+                            key = thread_id or stream_key
+                            if self._view_stream_key == key:
+                                await chat.begin_tool_call(tool)
+                            if (
+                                self._watch_session is not None
+                                and self._watch_session.id == key
+                            ):
+                                await self.query_one(
+                                    WatchPane
+                                ).begin_tool_call(tool)
+                        elif event_type == "tool.output":
+                            text = event.get("text") or ""
+                            if text:
+                                key = thread_id or stream_key
+                                if self._view_stream_key == key:
+                                    await chat.append_tool_output(text)
+                                if (
+                                    self._watch_session is not None
+                                    and self._watch_session.id == key
+                                ):
+                                    await self.query_one(
+                                        WatchPane
+                                    ).append_tool_output(text)
+                        elif event_type == "tool.completed":
+                            tool = event.get("tool") or {}
+                            key = thread_id or stream_key
+                            if self._view_stream_key == key:
+                                await chat.finish_tool_call(tool)
+                            if (
+                                self._watch_session is not None
+                                and self._watch_session.id == key
+                            ):
+                                await self.query_one(
+                                    WatchPane
+                                ).finish_tool_call(tool)
+                        elif event_type == "tool.waiting":
+                            key = thread_id or stream_key
+                            process_id = event.get("process_id")
+                            if self._view_stream_key == key:
+                                chat.begin_background_waiting(process_id)
+                            if (
+                                self._watch_session is not None
+                                and self._watch_session.id == key
+                            ):
+                                self.query_one(
+                                    WatchPane
+                                ).begin_background_waiting(process_id)
+                        elif event_type == "tool.interaction":
+                            key = thread_id or stream_key
+                            item_id = event.get("item_id")
+                            if self._view_stream_key == key:
+                                chat.end_background_waiting(item_id)
+                            if (
+                                self._watch_session is not None
+                                and self._watch_session.id == key
+                            ):
+                                self.query_one(
+                                    WatchPane
+                                ).end_background_waiting(item_id)
                         elif event_type == "item.completed":
                             item = event.get("item") or {}
                             if (
@@ -828,6 +959,7 @@ class CodexTuiApp(App[None]):
             self._active_new_views.discard(f"new:{project}")
             if self._view_stream_key in (stream_key, final_key):
                 await chat.finish_assistant()
+                await chat.clear_pending_tool()
                 self._view_stream_key = None
             self._stream_buffers.pop(final_key, None)
             if (
@@ -853,6 +985,28 @@ class CodexTuiApp(App[None]):
             self._completed_turns += 1
 
 
+def resolve_sandbox(
+    sandbox: str | None,
+    yolo: bool,
+    default: str,
+) -> str:
+    """Pick the effective sandbox for a CLI invocation.
+
+    ``--yolo`` mirrors codex's yolo mode (``--dangerously-bypass-approvals-
+    and-sandbox``): approvals are already always disabled in this app, so the
+    remaining effect is forcing ``danger-full-access``. An explicit conflicting
+    ``--sandbox`` is rejected instead of silently overridden.
+    """
+    if yolo:
+        if sandbox is not None and sandbox != "danger-full-access":
+            raise ValueError(
+                "--yolo conflicts with --sandbox: yolo forces "
+                "danger-full-access"
+            )
+        return "danger-full-access"
+    return sandbox if sandbox is not None else default
+
+
 def run_cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="codex-tui",
@@ -861,8 +1015,21 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--sandbox",
         choices=("read-only", "workspace-write", "danger-full-access"),
-        default=os.environ.get("CODEX_TUI_SANDBOX", "workspace-write"),
-        help="Sandbox passed to `codex exec` (default: workspace-write).",
+        default=None,
+        help=(
+            "Sandbox passed to codex; default is $CODEX_TUI_SANDBOX or "
+            "workspace-write. Conflicts with --yolo."
+        ),
+    )
+    parser.add_argument(
+        "--yolo",
+        action="store_true",
+        help=(
+            "Codex yolo mode: bypass all approval prompts and disable "
+            "sandboxing (equivalent to codex "
+            "--dangerously-bypass-approvals-and-sandbox). Forces the sandbox "
+            "to danger-full-access. EXTREMELY DANGEROUS."
+        ),
     )
     parser.add_argument(
         "--codex-bin",
@@ -890,6 +1057,15 @@ def run_cli(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    try:
+        sandbox = resolve_sandbox(
+            args.sandbox,
+            args.yolo,
+            os.environ.get("CODEX_TUI_SANDBOX", "workspace-write"),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     if args.clean_trash:
         store = SessionStore(
             sessions_dir=Path(args.sessions_dir) if args.sessions_dir else None
@@ -901,16 +1077,17 @@ def run_cli(argv: list[str] | None = None) -> int:
     fallback = None
     if args.mode in ("auto", "interactive"):
         runner = InteractiveCodexRunner(
-            codex_bin=args.codex_bin, sandbox=args.sandbox
+            codex_bin=args.codex_bin, sandbox=sandbox
         )
-        fallback = CodexRunner(codex_bin=args.codex_bin, sandbox=args.sandbox)
+        fallback = CodexRunner(codex_bin=args.codex_bin, sandbox=sandbox)
     else:
-        runner = CodexRunner(codex_bin=args.codex_bin, sandbox=args.sandbox)
+        runner = CodexRunner(codex_bin=args.codex_bin, sandbox=sandbox)
     sessions_dir = Path(args.sessions_dir) if args.sessions_dir else None
     CodexTuiApp(
         sessions_dir=sessions_dir,
         runner=runner,
         fallback_runner=fallback,
+        yolo=args.yolo,
     ).run()
     return 0
 

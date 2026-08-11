@@ -76,6 +76,7 @@ codex-tui
 | 选项 | 说明 |
 | --- | --- |
 | `--sandbox read-only\|workspace-write\|danger-full-access` | 传给 `codex exec` 的沙箱级别；默认 `workspace-write`（允许在所选项目内编辑）。可用环境变量 `CODEX_TUI_SANDBOX` 覆盖。 |
+| `--yolo` | Codex yolo 模式：跳过所有审批提示并禁用沙箱（等价于 `codex --dangerously-bypass-approvals-and-sandbox`）。强制沙箱为 `danger-full-access`，与显式指定其他 `--sandbox` 值冲突。极其危险。 |
 | `--codex-bin PATH` | codex 可执行文件路径（默认：`codex`）。 |
 | `--mode auto\|interactive\|exec` | 回合后端：`interactive` 通过 `codex app-server` 流式输出增量；`exec` 使用一次性 `codex exec --json`。默认 `auto`（优先 interactive，app-server 不可用时自动回退 exec）。可用环境变量 `CODEX_TUI_MODE` 覆盖。 |
 | `--sessions-dir PATH` | 覆盖会话目录（默认：`$CODEX_HOME/sessions`）。 |
@@ -106,6 +107,20 @@ codex-tui
 | `Esc` | 中断当前回合 |
 | `q` | 退出（按 `Ctrl+Q` 确认） |
 
+## 斜杠命令
+
+输入框里支持 codex 风格的斜杠命令，回车后本地处理、不会发给模型：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/clear`、`/new` | 清空聊天区并开始新会话（旧会话保留在侧边栏） |
+| `/help` | 打开快捷键参考页 |
+| `/model` | 选择会话模型 |
+| `/rename` | 重命名当前会话 |
+| `/quit`、`/exit` | 退出 TUI |
+
+未识别的命令会提示 `未知命令` 并被忽略。
+
 会话标题和模型选择保存在 `~/.codex-tui/overrides.json`；codex 自己的会话文件
 永远不会被修改。删除的会话会移到 `~/.codex-tui/trash` 而不是直接抹掉。
 
@@ -119,8 +134,28 @@ codex-tui
   输出时服务端推送 `item/agentMessage/delta` 通知，聊天区增量渲染，回合结束时
   再转为 Markdown。
 - 多个会话可以同时跑回合；每个会话订阅自己的线程通知，流式文本按会话缓冲，
-  后台回复绝不会串到当前正在看的视图里。后台回合完成时会通过应用内 toast、
-  侧边栏标记和 `Ctrl+G` 快捷键提示。
+  后台回复绝不会串到当前正在看的视图里，切换项目或会话也不会中断正在运行的
+  回合。回合运行时工具调用会实时显示在聊天区：
+  每个 `exec_command` 和文件修改都有一条仿 codex CLI 的状态行（`• Running
+  <命令>` → `• Ran <命令>`，成功绿色、失败红色），命令输出以暗色 `└` 前缀
+  边跑边显示在该行下方，不用对着转圈等结果。模型在等待后台终端时，会像
+  codex CLI 一样显示一闪一闪的 `• Waiting for background terminal · <命令>`
+  状态行。只读探索会合并成彩色的 `• Explored` 单元（`└ Search <关键词> in
+  <路径>` / `Read <文件>`，动作名青色），文件修改显示为 `• Edited <文件>
+  (+N -M)` 并带彩色 diff 预览（新增行绿色、删除行红色），和 codex 一致。
+  回合运行时状态行还有旋转的加载动画（`⠋ Codex is working…`），
+  侧边栏里的会话也会出现动态标记，从其他视图也能一眼看出 agent 在工作。
+  流式文本和工具输出会合并到约 25fps 刷新（短回复仍然即时显示），长回答
+  通过有界的分块组件流式渲染，每帧只重绘一小段尾部而不是整条消息；工作时
+  终端标题同样会显示活动动画。助手消息改用内置的轻量 Markdown 渲染器
+  （标题、粗斜体、行内代码、代码块、列表、引用），不再解析完整 CommonMark，
+  打开转录快约 10 倍。
+  切换会话/项目也做了响应性优化：会话扫描在后台线程执行、侧边栏列表批量
+  重建、长会话转录采用懒渲染——打开会话时只构建可见的尾部，往上滚动时
+  自动补充更早的消息，`F7` 可直接跳到最早的消息，不会再整屏卡死。侧边栏
+  列表只读取会话元数据（完整转录按需解析），即使有成百上千个大会话，切换
+  也能保持流畅。
+  后台回合完成时会通过应用内 toast、侧边栏标记和 `Ctrl+G` 快捷键提示。
 - 如果 `codex app-server` 不可用或某个回合失败，TUI 会自动回退到
   `codex exec --json`，并重新从磁盘读取会话记录。
 - 删除的会话移到 `~/.codex-tui/trash`，不会直接删除。
@@ -130,7 +165,8 @@ codex-tui
 - 回合使用 app-server 的 `approvalPolicy: "never"`（与无交互的 `codex exec`
   行为一致），因此 TUI 内没有审批弹窗：`--sandbox` 决定 Codex 能做什么。
   `workspace-write` 允许修改所选项目内的文件；`read-only` 禁止写入；
-  `danger-full-access` 允许一切操作。
+  `danger-full-access` 允许一切操作。`--yolo` 是后者的快捷写法（审批本来
+  就处于关闭状态）。
 - 如果找不到 `codex` 可执行文件，发送消息会显示应用内错误而不是崩溃。
 - `codex app-server` 属于实验性 CLI 接口；如果未来 codex 版本改动协议，TUI
   会降级到 `exec` 模式而不是报错。

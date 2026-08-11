@@ -14,11 +14,27 @@ import json
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
-from codex_tui.runner import CodexRunError, DEFAULT_CODEX_BIN
+from codex_tui.runner import (
+    CodexRunError,
+    DEFAULT_CODEX_BIN,
+    is_exploring,
+    normalize_command_actions,
+    normalize_file_changes,
+    strip_shell_wrapper,
+)
 
 
 CONNECT_TIMEOUT = 30.0
 _SERVER_EXITED = "_server_exited"
+
+# App-server item types whose lifecycle is shown in the chat as tool activity.
+TOOL_ITEM_TYPES = (
+    "commandExecution",
+    "fileChange",
+    "mcpToolCall",
+    "dynamicToolCall",
+    "webSearch",
+)
 
 
 def _auto_approval_response(method: str, params: dict[str, Any]) -> dict:
@@ -45,6 +61,63 @@ def _auto_approval_response(method: str, params: dict[str, Any]) -> dict:
     return {
         "error": {"code": -32601, "message": f"unsupported server request {method}"}
     }
+
+
+def normalize_server_tool_event(item: dict, started: bool) -> TurnEvent | None:
+    """Map an app-server tool item to a unified tool event.
+
+    App-server items use camelCase (``commandExecution``, ``exitCode``,
+    ``inProgress``); exec-mode items use snake_case. Both are normalized to the
+    same ``tool.*`` shape the TUI renders.
+    """
+    item_type = item.get("type")
+    if item_type not in TOOL_ITEM_TYPES:
+        return None
+    tool: dict[str, Any] = {
+        "id": item.get("id"),
+        "kind": item_type,
+        "status": "failed",
+        "exit_code": None,
+    }
+    status = item.get("status")
+    if status in ("inProgress", "in_progress"):
+        tool["status"] = "running"
+    elif status in ("completed", "succeeded"):
+        tool["status"] = "completed"
+    if item_type == "commandExecution":
+        tool["label"] = "exec_command"
+        tool["detail"] = strip_shell_wrapper(item.get("command") or "")
+        tool["exit_code"] = item.get("exitCode")
+        tool["source"] = item.get("source") or "agent"
+        tool["process_id"] = item.get("processId")
+        actions = normalize_command_actions(item.get("commandActions"))
+        tool["actions"] = actions
+        tool["exploring"] = is_exploring(actions)
+        if not started:
+            tool["output"] = item.get("aggregatedOutput") or ""
+    elif item_type == "fileChange":
+        changes = item.get("changes") or []
+        paths = sorted(
+            {str(change.get("path")) for change in changes if change.get("path")}
+        )
+        tool["label"] = "apply_patch"
+        tool["detail"] = ", ".join(paths)
+        tool["changes"] = normalize_file_changes(changes)
+    elif item_type == "mcpToolCall":
+        server = item.get("server") or ""
+        tool_name = item.get("tool") or ""
+        tool["label"] = "mcp_tool"
+        tool["detail"] = f"{server}/{tool_name}".strip("/")
+    elif item_type == "dynamicToolCall":
+        tool["label"] = item.get("tool") or "dynamic_tool"
+        tool["detail"] = item.get("namespace") or ""
+    else:  # webSearch
+        tool["label"] = "web_search"
+        tool["detail"] = item.get("query") or ""
+    return TurnEvent(
+        "tool_started" if started else "tool_completed",
+        tool=tool,
+    )
 
 
 class AppServerClient:
@@ -270,8 +343,42 @@ class AppServerClient:
                         item_id=params.get("itemId"),
                         turn_id=turn_id,
                     )
+            elif method == "item/started":
+                item = params.get("item") or {}
+                tool_event = (
+                    normalize_server_tool_event(item, started=True)
+                    if isinstance(item, dict)
+                    else None
+                )
+                if tool_event is not None:
+                    yield tool_event
+            elif method in (
+                "item/commandExecution/outputDelta",
+                "item/fileChange/outputDelta",
+            ):
+                delta = params.get("delta") or ""
+                if delta:
+                    yield TurnEvent("tool_output", text=delta, turn_id=turn_id)
+            elif method in (
+                "item/commandExecution/terminalInteraction",
+                "item/commandExecution/lnInteraction",
+            ):
+                # An empty stdin means the model is polling a background
+                # terminal; codex surfaces that as a blinking "Waiting for
+                # background terminal" status. Non-empty stdin means the model
+                # interacted with the terminal instead.
+                stdin = params.get("stdin") or ""
+                yield TurnEvent(
+                    "tool_interaction" if stdin else "tool_waiting",
+                    text=stdin,
+                    item_id=params.get("itemId"),
+                    process_id=params.get("processId"),
+                    turn_id=turn_id,
+                )
             elif method == "item/completed":
                 item = params.get("item") or {}
+                if not isinstance(item, dict):
+                    continue
                 if item.get("type") == "agent_message":
                     yield TurnEvent(
                         "item_completed",
@@ -279,6 +386,10 @@ class AppServerClient:
                         item_id=item.get("id"),
                         turn_id=turn_id,
                     )
+                else:
+                    tool_event = normalize_server_tool_event(item, started=False)
+                    if tool_event is not None:
+                        yield tool_event
             elif method == "turn/completed":
                 yield TurnEvent(
                     "turn_completed",
@@ -371,11 +482,14 @@ class AppServerClient:
 class TurnEvent:
     """One streamed event produced while a turn runs."""
 
-    kind: str  # "delta" | "item_completed" | "turn_completed"
+    kind: str  # "delta" | "item_completed" | "tool_started" | "tool_output" |
+    # "tool_completed" | "tool_waiting" | "tool_interaction" | "turn_completed"
     text: str = ""
     item_id: str | None = None
+    process_id: str | None = None
     turn_id: str | None = None
     status: str | None = None
+    tool: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         if self.kind == "delta":
@@ -393,6 +507,39 @@ class TurnEvent:
                     "type": "agent_message",
                     "text": self.text,
                 },
+                "turn_id": self.turn_id,
+            }
+        if self.kind == "tool_started":
+            return {
+                "type": "tool.started",
+                "tool": self.tool,
+                "turn_id": self.turn_id,
+            }
+        if self.kind == "tool_output":
+            return {
+                "type": "tool.output",
+                "text": self.text,
+                "turn_id": self.turn_id,
+            }
+        if self.kind == "tool_completed":
+            return {
+                "type": "tool.completed",
+                "tool": self.tool,
+                "turn_id": self.turn_id,
+            }
+        if self.kind == "tool_waiting":
+            return {
+                "type": "tool.waiting",
+                "item_id": self.item_id,
+                "process_id": self.process_id,
+                "turn_id": self.turn_id,
+            }
+        if self.kind == "tool_interaction":
+            return {
+                "type": "tool.interaction",
+                "text": self.text,
+                "item_id": self.item_id,
+                "process_id": self.process_id,
                 "turn_id": self.turn_id,
             }
         return {
