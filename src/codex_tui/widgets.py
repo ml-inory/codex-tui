@@ -40,11 +40,18 @@ _LAZY_CHUNK = 12
 _LAZY_EDGE = 60  # rows from the top that trigger loading more
 _LAZY_POLL_INTERVAL = 0.15
 
-# GitHub-dark palette used by the codex CLI for tool activity.
-TOOL_RUNNING_COLOR = "#FEA62B"
-TOOL_SUCCESS_COLOR = "#3FB950"
-TOOL_FAILED_COLOR = "#F85149"
-TOOL_BODY_COLOR = "#C9D1D9"
+# opencode default dark palette (theme/assets/opencode.json in sst/opencode):
+# running rows are bright text, completed rows are muted, failures are red.
+TOOL_RUNNING_COLOR = "#eeeeee"  # theme.text
+TOOL_SUCCESS_COLOR = "#808080"  # theme.textMuted (completed tool rows)
+TOOL_FAILED_COLOR = "#e06c75"  # theme.error
+TOOL_BODY_COLOR = "#808080"  # theme.textMuted
+TOOL_DIFF_ADDED = "#4fd6be"
+TOOL_DIFF_REMOVED = "#c53b53"
+TOOL_DIFF_SIGN_ADDED = "#b8db87"
+TOOL_DIFF_SIGN_REMOVED = "#e26a75"
+TOOL_DIFF_ADDED_BG = "#20303b"
+TOOL_DIFF_REMOVED_BG = "#37222c"
 
 # codex verbs per tool kind: (in-progress, completed).
 _TOOL_VERBS = {
@@ -125,7 +132,7 @@ class BackgroundWaitStatus:
         if self._on:
             text.append("•", style=f"bold {TOOL_RUNNING_COLOR}")
         else:
-            text.append("◦", style="dim #8B949E")
+            text.append("◦", style="dim #808080")
         text.append(" Waiting for background terminal", style="bold")
         if self._detail:
             text.append(f" · {self._detail}", style="dim")
@@ -586,12 +593,12 @@ class ChatLog(VerticalScroll):
 
     def _build_rows(self, role: str, content: str) -> list[Widget]:
         if role == "user":
-            # Codex CLI style: cyan "You" label, plain text.
+            # opencode style: cyan "You" label, plain text.
             return [
                 Static("You", classes="user-label"),
                 Static(escape(content), classes="user-body"),
             ]
-        # Codex CLI style: magenta "Codex" label above the markdown body.
+        # opencode style: secondary-blue "Codex" label above the markdown body.
         return [
             Static("Codex", classes="assistant-label"),
             Static(render_markdown(content), classes="assistant-body"),
@@ -874,23 +881,24 @@ class ChatLog(VerticalScroll):
         """Build a codex-style tool header, e.g. ``• Running ls -la``."""
         if running:
             bullet_style = f"bold {TOOL_RUNNING_COLOR}"
+            row_style = TOOL_RUNNING_COLOR
         elif tool.get("status") == "completed":
             bullet_style = f"bold {TOOL_SUCCESS_COLOR}"
+            row_style = TOOL_SUCCESS_COLOR
         else:
             bullet_style = f"bold {TOOL_FAILED_COLOR}"
+            row_style = TOOL_FAILED_COLOR
         header = Text()
         header.append("•", style=bullet_style)
         verb = _tool_verb(tool, running)
-        header.append(f" {verb}", style="bold")
+        header.append(f" {verb}", style=f"bold {row_style}")
         detail = tool.get("detail") or ""
         if detail:
-            if (
+            separator = " for" if (
                 not running
                 and tool.get("kind") in ("web_search", "webSearch")
-            ):
-                header.append(f" for {detail}", style=TOOL_BODY_COLOR)
-            else:
-                header.append(f" {detail}", style=TOOL_BODY_COLOR)
+            ) else ""
+            header.append(f"{separator} {detail}", style=row_style)
         return header
 
     def _background_terminal_header(self, tool: dict, interacted: bool) -> Text:
@@ -928,10 +936,10 @@ class ChatLog(VerticalScroll):
         header = Text()
         if running:
             header.append("•", style=f"bold {TOOL_RUNNING_COLOR}")
-            header.append(" Exploring", style="bold")
+            header.append(" Exploring", style=f"bold {TOOL_RUNNING_COLOR}")
         else:
-            header.append("•", style="dim")
-            header.append(" Explored", style="bold")
+            header.append("•", style=f"bold {TOOL_SUCCESS_COLOR}")
+            header.append(" Explored", style=f"bold {TOOL_SUCCESS_COLOR}")
         actions = tool.get("actions") or []
         for index, action in enumerate(actions):
             header.append("\n" + ("  └ " if index == 0 else "    "))
@@ -940,12 +948,12 @@ class ChatLog(VerticalScroll):
 
     @staticmethod
     def _exploring_action_text(action: dict) -> Text:
-        """Render one action line, e.g. ``Search <q> in <path>`` (cyan title)."""
+        """Render one action line, e.g. ``Search <q> in <path>`` (muted title)."""
         kind = action.get("kind")
         title = {"read": "Read", "listFiles": "List", "search": "Search"}.get(
             kind, "Run"
         )
-        line = Text(title, style="#79C0FF")
+        line = Text(title, style=TOOL_BODY_COLOR)
         if kind == "search":
             query = action.get("query")
             path = action.get("path")
@@ -970,10 +978,10 @@ class ChatLog(VerticalScroll):
         if running:
             header = Text()
             header.append("•", style=f"bold {TOOL_RUNNING_COLOR}")
-            header.append(" Applying", style="bold")
+            header.append(" Applying", style=f"bold {TOOL_RUNNING_COLOR}")
             detail = tool.get("detail") or ""
             if detail:
-                header.append(f" {detail}", style=TOOL_BODY_COLOR)
+                header.append(f" {detail}", style=TOOL_RUNNING_COLOR)
             return header
         has_diff = any((change.get("diff") or "") for change in changes)
         if not changes or not has_diff:
@@ -995,7 +1003,7 @@ class ChatLog(VerticalScroll):
             return header
 
         header = Text()
-        header.append("• ", style="dim")
+        header.append("• ", style=f"bold {TOOL_SUCCESS_COLOR}")
         total_added = total_removed = 0
         counts = [self._change_line_counts(change) for change in changes]
         total_added = sum(added for added, _ in counts)
@@ -1064,9 +1072,9 @@ class ChatLog(VerticalScroll):
     @staticmethod
     def _line_count_text(added: int, removed: int) -> Text:
         text = Text("(")
-        text.append(f"+{added}", style=TOOL_SUCCESS_COLOR)
+        text.append(f"+{added}", style=TOOL_DIFF_ADDED)
         text.append(" ")
-        text.append(f"-{removed}", style=TOOL_FAILED_COLOR)
+        text.append(f"-{removed}", style=TOOL_DIFF_REMOVED)
         text.append(")")
         return text
 
@@ -1107,9 +1115,16 @@ class ChatLog(VerticalScroll):
         for raw, line_number, kind in entries:
             line = Text()
             if kind in ("add", "del"):
-                background = "#212922" if kind == "add" else "#3C170F"
+                background = (
+                    TOOL_DIFF_ADDED_BG if kind == "add" else TOOL_DIFF_REMOVED_BG
+                )
                 foreground = (
-                    TOOL_SUCCESS_COLOR if kind == "add" else TOOL_FAILED_COLOR
+                    TOOL_DIFF_ADDED if kind == "add" else TOOL_DIFF_REMOVED
+                )
+                sign = (
+                    TOOL_DIFF_SIGN_ADDED
+                    if kind == "add"
+                    else TOOL_DIFF_SIGN_REMOVED
                 )
                 line.append(
                     f"    {line_number:>{width}} ",
@@ -1117,7 +1132,7 @@ class ChatLog(VerticalScroll):
                 )
                 line.append(
                     "+" if kind == "add" else "-",
-                    style=f"bold {foreground} on {background}",
+                    style=f"bold {sign} on {background}",
                 )
                 line.append(raw[1:], style=f"{foreground} on {background}")
             elif kind == "ctx":

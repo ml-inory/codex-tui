@@ -14,10 +14,14 @@ import re
 from rich.text import Text
 
 
-_CODE_BG = "#161B22"
-_HEADER_STYLE = "bold #E6EDF3"
-_QUOTE_COLOR = "#8B949E"
-_LINK_COLOR = "#58A6FF"
+# opencode default dark palette: headings purple, links orange, code green,
+# blockquotes yellow, code blocks on the same near-black background.
+_CODE_BG = "#0a0a0a"
+_CODE_COLOR = "#7fd88f"
+_CODE_LANG_STYLE = "#808080"
+_HEADER_STYLE = "bold #9d7cd8"
+_QUOTE_COLOR = "#e5c07b"
+_LINK_COLOR = "#fab283"
 
 _INLINE_RE = re.compile(
     r"(`[^`\n]+`|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|"
@@ -45,17 +49,17 @@ def _append_inline(text: Text, raw: str, base: str = "") -> None:
             emit(raw[pos : match.start()])
         token = match.group(0)
         if token.startswith("`"):
-            emit(token[1:-1], f"on {_CODE_BG}")
+            emit(token[1:-1], f"{_CODE_COLOR} on {_CODE_BG}")
         elif token.startswith("***"):
-            emit(token[3:-3], "bold italic")
+            emit(token[3:-3], "bold italic #e5c07b")
         elif token.startswith("**") or token.startswith("__"):
-            emit(token[2:-2], "bold")
+            emit(token[2:-2], "bold #f5a742")
         elif token.startswith("~~"):
             emit(token[2:-2], "strike")
         elif token.startswith("["):
             emit(token[1 : token.find("]")], _LINK_COLOR)
         else:
-            emit(token[1:-1], "italic")
+            emit(token[1:-1], "italic #e5c07b")
         pos = match.end()
     emit(raw[pos:])
 
@@ -84,10 +88,12 @@ def render_markdown(content: str) -> Text:
             index += 1  # skip the closing fence
             block = Text()
             if language:
-                block.append(language, style=f"bold {_HEADER_STYLE} on {_CODE_BG}")
+                block.append(
+                    language, style=f"bold {_CODE_LANG_STYLE} on {_CODE_BG}"
+                )
                 block.append("\n")
             for line_no, code_line in enumerate(body):
-                block.append(code_line, style=f"on {_CODE_BG}")
+                block.append(code_line, style=f"{_CODE_COLOR} on {_CODE_BG}")
                 if line_no < len(body) - 1:
                     block.append("\n")
             blocks.append(block)
@@ -102,7 +108,7 @@ def render_markdown(content: str) -> Text:
             continue
 
         if _RULE_RE.match(stripped):
-            blocks.append(Text("─" * 24, style="dim"))
+            blocks.append(Text("─" * 24, style="dim #808080"))
             index += 1
             continue
 
@@ -135,7 +141,12 @@ def render_markdown(content: str) -> Text:
             block = Text()
             for item_no, (marker, item) in enumerate(items):
                 bullet = "•" if marker in ("-", "*", "+") else f"{item_no + 1}."
-                block.append(f" {bullet} ", style="bold")
+                bullet_style = (
+                    "bold #fab283"
+                    if marker in ("-", "*", "+")
+                    else "bold #56b6c2"
+                )
+                block.append(f" {bullet} ", style=bullet_style)
                 _append_inline(block, item)
                 if item_no < len(items) - 1:
                     block.append("\n")

@@ -11,7 +11,7 @@ def test_heading_and_paragraph_are_bold_and_separated() -> None:
     assert "Some bold body." in text.plain
     assert "\n\n" in text.plain
     styles = [style for _, style in _spans(text)]
-    assert any("bold" in style and "#E6EDF3" in style for style in styles)
+    assert any("bold" in style and "#9d7cd8" in style for style in styles)
 
 
 def test_inline_emphasis_and_code() -> None:
@@ -19,7 +19,7 @@ def test_inline_emphasis_and_code() -> None:
     plain = text.plain
     assert plain == "a code b bold c italic d gone"
     spans = _spans(text)
-    assert any(part == "code" and "on #161B22" in style for part, style in spans)
+    assert any(part == "code" and "on #0a0a0a" in style for part, style in spans)
     assert any(part == "bold" and "bold" in style for part, style in spans)
     assert any(part == "italic" and "italic" in style for part, style in spans)
     assert any(part == "gone" and "strike" in style for part, style in spans)
@@ -30,7 +30,7 @@ def test_fenced_code_block_keeps_content_and_language() -> None:
     assert "python" in text.plain
     assert "print('hi')" in text.plain
     spans = _spans(text)
-    assert any(part == "print('hi')" and "on #161B22" in style for part, style in spans)
+    assert any(part == "print('hi')" and "on #0a0a0a" in style for part, style in spans)
 
 
 def test_lists_and_blockquote() -> None:

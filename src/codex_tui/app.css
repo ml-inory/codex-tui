@@ -1,5 +1,6 @@
 Screen {
     layout: horizontal;
+    background: #0a0a0a;
 }
 
 #sidebar {
@@ -7,14 +8,14 @@ Screen {
     min-width: 22;
     max-width: 32;
     height: 1fr;
-    background: #1E1E1E;
-    border-right: solid #CF7E00;
+    background: #141414;
+    border-right: solid #3c3c3c;
     padding: 0 1 1 1;
 }
 
 .section-title {
     text-style: bold;
-    color: #8E8E8E;
+    color: #808080;
     margin-top: 1;
     margin-bottom: 1;
 }
@@ -22,7 +23,7 @@ Screen {
 #project-list,
 #session-list {
     height: 40%;
-    border: round #0065BE;
+    border: round #484848;
 }
 
 #session-list {
@@ -37,15 +38,15 @@ Screen {
 }
 
 .session-label.finished {
-    color: #FEA62B;
+    color: #eeeeee;
 }
 
 .session-label.running {
-    color: #3FB950;
+    color: #7fd88f;
 }
 
 #sidebar-hint {
-    color: #8E8E8E;
+    color: #808080;
     margin-top: 1;
 }
 
@@ -67,35 +68,35 @@ Screen {
     height: 1fr;
     layout: vertical;
     padding: 0 1;
-    border-left: solid #0065BE;
+    border-left: solid #3c3c3c;
 }
 
 .watch-header {
     height: auto;
     padding: 0 1;
-    color: #8E8E8E;
+    color: #808080;
     content-align: left middle;
-    border-bottom: solid #0065BE;
+    border-bottom: solid #3c3c3c;
 }
 
 .watch-status {
     height: auto;
     padding: 0 1;
-    color: #FEA62B;
+    color: #808080;
 }
 
 #chat-header {
     height: auto;
     padding: 0 1;
-    color: #8E8E8E;
+    color: #808080;
     content-align: left middle;
-    border-bottom: solid #0065BE;
+    border-bottom: solid #3c3c3c;
 }
 
 #chat-status {
     height: auto;
     padding: 0 1;
-    color: #FEA62B;
+    color: #808080;
 }
 
 #chat-log {
@@ -111,7 +112,7 @@ Screen {
 
 .user-label {
     text-style: bold;
-    color: cyan;
+    color: #56b6c2;
     padding-bottom: 1;
 }
 
@@ -122,7 +123,7 @@ Screen {
 
 .assistant-label {
     text-style: bold;
-    color: magenta;
+    color: #5c9cf5;
     padding-bottom: 1;
 }
 
@@ -137,27 +138,26 @@ Screen {
 
 .tool-label {
     text-style: bold;
-    color: #FEA62B;
+    color: #808080;
     padding-top: 1;
 }
 
 .tool-label.completed {
-    color: #3FB950;
+    color: #808080;
 }
 
 .tool-label.failed {
-    color: #F85149;
+    color: #e06c75;
 }
 
 .tool-output {
     width: 1fr;
-    color: #8B949E;
-    text-style: dim;
+    color: #eeeeee;
     padding-bottom: 1;
 }
 
 .earlier-hint {
-    color: #8E8E8E;
+    color: #808080;
     text-style: italic;
     padding: 0 1;
 }
@@ -165,8 +165,8 @@ Screen {
 #rename-dialog {
     width: 60;
     height: auto;
-    border: thick #FEA62B;
-    background: #1E1E1E;
+    border: thick #606060;
+    background: #141414;
     padding: 1 2;
     layout: vertical;
 }
@@ -174,22 +174,22 @@ Screen {
 #model-dialog {
     width: 60;
     height: auto;
-    border: thick #FEA62B;
-    background: #1E1E1E;
+    border: thick #606060;
+    background: #141414;
     padding: 1 2;
     layout: vertical;
 }
 
 #model-list {
     height: 8;
-    border: round #0065BE;
+    border: round #484848;
 }
 
 #quick-switch-dialog {
     width: 80;
     height: auto;
-    border: thick #FEA62B;
-    background: #1E1E1E;
+    border: thick #606060;
+    background: #141414;
     padding: 1 2;
     layout: vertical;
 }
@@ -200,14 +200,14 @@ Screen {
 
 #quick-switch-list {
     height: 12;
-    border: round #0065BE;
+    border: round #484848;
 }
 
 #key-help-dialog {
     width: 80;
     height: 70%;
-    border: thick #FEA62B;
-    background: #1E1E1E;
+    border: thick #606060;
+    background: #141414;
     padding: 1 2;
     layout: vertical;
 }
@@ -218,7 +218,7 @@ Screen {
 
 #key-help-list {
     height: 1fr;
-    border: round #0065BE;
+    border: round #484848;
 }
 
 .model-label {

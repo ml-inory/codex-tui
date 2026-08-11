@@ -2133,7 +2133,7 @@ def test_exploring_and_edited_cells_render_codex_style(tmp_path: Path) -> None:
             assert "└ Search exclusive in app.py" in content
             assert "Read app.py" in content
             span_styles = [str(s.style) for s in labels[-1].content.spans]
-            assert any("#79C0FF" in style for style in span_styles)
+            assert any("#808080" in style for style in span_styles)
 
             fake.gate_explored.set()
             assert await _wait_until(
@@ -2154,8 +2154,8 @@ def test_exploring_and_edited_cells_render_codex_style(tmp_path: Path) -> None:
             edited = str(label_texts(app)[-1].content)
             assert "y = 2" in edited
             span_styles = [str(s.style) for s in label_texts(app)[-1].content.spans]
-            assert any("#3FB950" in style for style in span_styles)
-            assert any("on #212922" in style for style in span_styles)
+            assert any("#4fd6be" in style for style in span_styles)
+            assert any("on #20303b" in style for style in span_styles)
 
             fake.gate_done.set()
             assert await _wait_until(pilot, lambda: app._completed_turns == 1)
