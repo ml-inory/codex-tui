@@ -15,6 +15,7 @@ from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
+from textual.events import Click
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, ListItem, ListView, Static
@@ -31,6 +32,7 @@ DEFAULT_WINDOW = 80
 MAX_TOOL_OUTPUT = 4000
 _BACKGROUND_WAIT_INTERVAL = 0.6  # codex blinks the waiting bullet every 600 ms
 _DIFF_MAX_LINES = 50
+_TOOL_TAIL_LINES = 6  # long tool output collapses to its tail, click to expand
 # Streaming text is re-rendered as a whole widget, so short bursts paint
 # immediately while long replies coalesce into ~25 fps flushes instead of
 # re-compositing the whole text on every delta (feels much faster over SSH).
@@ -82,6 +84,33 @@ def _prefix_tool_output(text: str) -> str:
     if not lines:
         return text
     return "\n".join([f"  └ {lines[0]}"] + [f"    {line}" for line in lines[1:]])
+
+
+def _tail_tool_output(text: str) -> Text:
+    """Indent output and keep only the last ``_TOOL_TAIL_LINES`` lines.
+
+    Mirrors codex/opencode: long command output is collapsed to its tail with
+    an omitted-lines marker; clicking the row toggles the full output.
+    """
+    lines = text.splitlines()
+    if not lines:
+        return Text("")
+    if len(lines) <= _TOOL_TAIL_LINES:
+        return Text(_prefix_tool_output(text))
+    omitted = len(lines) - _TOOL_TAIL_LINES
+    display = Text()
+    display.append(
+        f"  … +{omitted} line{'s' if omitted != 1 else ''} omitted"
+        " — click to expand",
+        style="dim",
+    )
+    display.append("\n")
+    display.append(_prefix_tool_output("\n".join(lines[-_TOOL_TAIL_LINES:])))
+    return display
+
+
+def _full_tool_output(text: str) -> Text:
+    return Text(_prefix_tool_output(text))
 
 
 class BackgroundWaitStatus:
@@ -833,14 +862,21 @@ class ChatLog(VerticalScroll):
             )
         if len(self._pending_tool_text) < _STREAM_INSTANT_LIMIT:
             container = await self._ensure_active_container()
-            display = Text(_prefix_tool_output(self._pending_tool_text))
             if self._pending_tool_output is None:
                 self._pending_tool_output = Static(
-                    display, classes="tool-output"
+                    _tail_tool_output(self._pending_tool_text),
+                    classes="tool-output",
                 )
+                self._pending_tool_output._full_text = self._pending_tool_text
+                self._pending_tool_output._tail_mode = True
                 await container.mount(self._pending_tool_output)
             else:
-                self._pending_tool_output.update(display)
+                self._pending_tool_output._full_text = self._pending_tool_text
+                self._pending_tool_output.update(
+                    _full_tool_output(self._pending_tool_text)
+                    if not self._pending_tool_output._tail_mode
+                    else _tail_tool_output(self._pending_tool_text)
+                )
             container.scroll_end(animate=False)
         else:
             self._schedule_tool_flush()
@@ -863,14 +899,21 @@ class ChatLog(VerticalScroll):
         if self._pending_tool_label is None:
             return
         container = await self._ensure_active_container()
-        display = Text(_prefix_tool_output(self._pending_tool_text))
         if self._pending_tool_output is None:
             self._pending_tool_output = Static(
-                display, classes="tool-output"
+                _tail_tool_output(self._pending_tool_text),
+                classes="tool-output",
             )
+            self._pending_tool_output._full_text = self._pending_tool_text
+            self._pending_tool_output._tail_mode = True
             await container.mount(self._pending_tool_output)
         else:
-            self._pending_tool_output.update(display)
+            self._pending_tool_output._full_text = self._pending_tool_text
+            self._pending_tool_output.update(
+                _full_tool_output(self._pending_tool_text)
+                if not self._pending_tool_output._tail_mode
+                else _tail_tool_output(self._pending_tool_text)
+            )
         container.scroll_end(animate=False)
 
     async def finish_tool_call(self, tool: dict) -> None:
@@ -913,8 +956,10 @@ class ChatLog(VerticalScroll):
                 output = "(no output)"
             if output:
                 self._pending_tool_output = Static(
-                    Text(_prefix_tool_output(output)), classes="tool-output"
+                    _tail_tool_output(output), classes="tool-output"
                 )
+                self._pending_tool_output._full_text = output
+                self._pending_tool_output._tail_mode = True
                 container = await self._ensure_active_container()
                 await container.mount(self._pending_tool_output)
                 container.scroll_end(animate=False)
@@ -925,6 +970,23 @@ class ChatLog(VerticalScroll):
         """Remember that the model sent stdin to a background terminal."""
         if item_id:
             self._interacted_items.add(item_id)
+
+    @on(Click, ".tool-output")
+    def _on_tool_output_click(self, event: Click) -> None:
+        """Toggle a collapsed tool-output row between tail and full output."""
+        static = event.widget
+        full_text = getattr(static, "_full_text", None)
+        if full_text is None:
+            return
+        if self.app.screen.get_selected_text():
+            return  # the user is dragging to select text, not expanding
+        if getattr(static, "_tail_mode", True):
+            static.update(_full_tool_output(full_text))
+            static._tail_mode = False
+        else:
+            static.update(_tail_tool_output(full_text))
+            static._tail_mode = True
+        event.stop()
 
     def _tool_header_text(self, tool: dict, running: bool) -> Text:
         """Build a codex-style tool header, e.g. ``• Running ls -la``."""

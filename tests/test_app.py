@@ -2431,6 +2431,61 @@ def test_add_project_rejects_missing_directory(tmp_path: Path) -> None:
     _run(scenario())
 
 
+def test_tool_output_collapses_to_tail_and_expands_on_click(tmp_path: Path) -> None:
+    """Long tool output shows its tail; clicking toggles the full text."""
+    session_id = "11111111-1111-1111-1111-111111111111"
+    make_session_file(
+        tmp_path,
+        session_id=session_id,
+        cwd="/proj/a",
+        user_text="hi",
+    )
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app._project_selected("/proj/a", select_id=session_id)
+            await pilot.pause()
+            chat = app.query_one(ChatLog)
+            await chat.begin_tool_call(
+                {
+                    "id": "e0",
+                    "kind": "commandExecution",
+                    "label": "exec_command",
+                    "detail": "make build",
+                    "status": "running",
+                }
+            )
+            output = "\n".join(f"line {n}" for n in range(1, 11)) + "\n"
+            await chat.append_tool_output(output)
+            await pilot.pause()
+
+            outputs = [
+                c
+                for c in chat.query(Static)
+                if "tool-output" in str(c.classes)
+            ]
+            assert outputs
+            shown = str(outputs[0].content)
+            assert "+4 lines omitted" in shown
+            assert "line 10" in shown
+            assert "line 5" in shown
+            assert "line 4" not in shown
+
+            await pilot.click(outputs[0])
+            await pilot.pause()
+            assert "line 4" in str(outputs[0].content)
+            assert "lines omitted" not in str(outputs[0].content)
+
+            await pilot.click(outputs[0])
+            await pilot.pause()
+            assert "line 4" not in str(outputs[0].content)
+            assert "+4 lines omitted" in str(outputs[0].content)
+
+    _run(scenario())
+
+
 def test_selecting_session_renders_conversation(tmp_path: Path) -> None:
     make_session_file(
         tmp_path,
