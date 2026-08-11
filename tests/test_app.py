@@ -9,7 +9,12 @@ from textual.widgets import Input, ListView, Static
 
 from codex_tui.app import CodexTuiApp, resolve_sandbox, run_cli
 from codex_tui.runner import CodexRunError
-from codex_tui.screens import KeyHelpScreen, ModelScreen, RenameScreen
+from codex_tui.screens import (
+    AddProjectScreen,
+    KeyHelpScreen,
+    ModelScreen,
+    RenameScreen,
+)
 from codex_tui.widgets import (
     ChatLog,
     ChatView,
@@ -2355,6 +2360,73 @@ def test_app_lists_projects_and_sessions(tmp_path: Path) -> None:
             assert len(project_list.children) == 1
             session_list = app.query_one("#session-list", ListView)
             assert len(session_list.children) == 1
+
+    _run(scenario())
+
+
+def test_add_project_flow_adds_sessionless_directory(tmp_path: Path) -> None:
+    """f4 lets a fresh clone (no sessions) become a working project."""
+    repo = tmp_path / "repo-clone"
+    repo.mkdir()
+    settings_path = tmp_path / "settings.json"
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, settings_path=settings_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert len(app.query_one("#project-list", ListView).children) == 0
+
+            await pilot.press("f4")
+            await pilot.pause()
+            assert isinstance(app.screen, AddProjectScreen)
+
+            path_input = app.screen.query_one("#add-project-input", Input)
+            path_input.value = str(repo)
+            await pilot.press("enter")
+            await _wait_until(
+                pilot,
+                lambda: not isinstance(app.screen, AddProjectScreen),
+            )
+            await pilot.pause()
+
+            assert app.current_project == str(repo)
+            assert "New session in" in str(
+                app.query_one("#chat-header", Static).content
+            )
+            assert len(app.query_one("#project-list", ListView).children) == 1
+            assert settings_path.is_file()
+            assert str(repo) in settings_path.read_text(encoding="utf-8")
+
+        # A later run still sees the session-less project.
+        second = CodexTuiApp(sessions_dir=tmp_path, settings_path=settings_path)
+        async with second.run_test() as pilot:
+            await pilot.pause()
+            assert str(repo) in second.settings.known_projects
+            assert len(second.query_one("#project-list", ListView).children) == 1
+
+    _run(scenario())
+
+
+def test_add_project_rejects_missing_directory(tmp_path: Path) -> None:
+    """f4 with a nonexistent path shows an inline error and stays open."""
+    settings_path = tmp_path / "settings.json"
+
+    async def scenario() -> None:
+        app = CodexTuiApp(sessions_dir=tmp_path, settings_path=settings_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("f4")
+            await pilot.pause()
+            assert isinstance(app.screen, AddProjectScreen)
+
+            path_input = app.screen.query_one("#add-project-input", Input)
+            path_input.value = str(tmp_path / "does-not-exist")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, AddProjectScreen)
+            error = app.screen.query_one("#add-project-error", Static)
+            assert "不是目录" in str(error.content)
 
     _run(scenario())
 

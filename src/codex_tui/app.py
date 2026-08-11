@@ -19,6 +19,7 @@ from codex_tui.overrides import Overrides
 from codex_tui.models import load_model_catalog
 from codex_tui.runner import CodexRunner, CodexRunError
 from codex_tui.screens import (
+    AddProjectScreen,
     KeyHelpScreen,
     ModelScreen,
     QuickSwitchScreen,
@@ -53,6 +54,7 @@ class CodexTuiApp(App[None]):
         Binding("f1", "show_key_help", "Keys", show=True),
         Binding("f2", "toggle_project_path", "Path", show=True),
         Binding("f3", "pick_model", "Model", show=True),
+        Binding("f4", "add_project", "Add project", show=True),
         Binding("f5", "refresh_sessions", "Refresh", show=True),
         Binding("f7", "load_earlier", "Earlier", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=True),
@@ -306,12 +308,22 @@ class CodexTuiApp(App[None]):
         """Scan session files off the UI thread so switching stays responsive."""
         return await asyncio.to_thread(self.store.list_sessions)
 
+    def _merged_projects(self, all_sessions: list[Session]) -> list[str]:
+        """Session-derived projects plus user-added directories (deduped)."""
+        projects = SessionStore.projects_from(all_sessions)
+        known = [
+            project
+            for project in self.settings.known_projects
+            if project not in projects
+        ]
+        return projects + known
+
     async def _sessions_for_project(self, project: str) -> list[Session]:
         return await asyncio.to_thread(self.store.sessions_for_project, project)
 
     async def _refresh_sessions_locked(self) -> None:
         all_sessions = await self._list_sessions()
-        projects = SessionStore.projects_from(all_sessions)
+        projects = self._merged_projects(all_sessions)
         sidebar = self.query_one(Sidebar)
         await sidebar.set_projects(projects, self.settings.project_mode)
         if not projects:
@@ -646,10 +658,28 @@ class CodexTuiApp(App[None]):
         """Redraw project and session lists without reopening the chat."""
         sidebar = self.query_one(Sidebar)
         await sidebar.set_projects(
-            self.store.list_projects(), self.settings.project_mode
+            self._merged_projects(await self._list_sessions()),
+            self.settings.project_mode,
         )
         if self.current_project is not None:
             await self._rerender_session_list_locked()
+
+    def action_add_project(self) -> None:
+        """Open a directory (e.g. a fresh clone) as a new project."""
+        if isinstance(self.screen, AddProjectScreen):
+            return
+        self.push_screen(AddProjectScreen(), self._on_add_project)
+
+    def _on_add_project(self, project: str | None) -> None:
+        if not project:
+            return
+        known = [p for p in self.settings.known_projects if p != project]
+        self.settings.known_projects = known + [project]
+        self.settings.save()
+        self.current_project = project
+        self.current_session = None
+        self._pending_delete = None
+        self.run_worker(self.refresh_sessions())
 
     def _on_quick_switch(self, session: Session | None) -> None:
         if session is None:

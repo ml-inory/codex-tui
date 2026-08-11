@@ -26,6 +26,9 @@ class AppSettings:
     path: Path
     project_mode: str = "short"  # "short" shows the deepest dir, "full" the path
     sidebar_visible: bool = True
+    # Directories added by the user that have no sessions yet (e.g. a fresh
+    # clone). Merged into the project list so they are selectable/workable.
+    known_projects: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppSettings":
@@ -43,6 +46,13 @@ class AppSettings:
             visible = raw.get("sidebar_visible")
             if isinstance(visible, bool):
                 settings.sidebar_visible = visible
+            known = raw.get("known_projects")
+            if isinstance(known, list):
+                settings.known_projects = [
+                    project
+                    for project in known
+                    if isinstance(project, str) and project
+                ]
         return settings
 
     def save(self) -> None:
@@ -53,6 +63,7 @@ class AppSettings:
                 {
                     "project_mode": self.project_mode,
                     "sidebar_visible": self.sidebar_visible,
+                    "known_projects": self.known_projects,
                 },
                 ensure_ascii=False,
                 indent=2,

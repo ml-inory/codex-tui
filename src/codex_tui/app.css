@@ -171,6 +171,25 @@ Screen {
     layout: vertical;
 }
 
+#add-project-dialog {
+    width: 72;
+    height: auto;
+    border: thick #606060;
+    background: #141414;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#add-project-input {
+    margin-bottom: 1;
+}
+
+#add-project-error {
+    height: auto;
+    color: #e06c75;
+    padding-bottom: 1;
+}
+
 #model-dialog {
     width: 60;
     height: auto;

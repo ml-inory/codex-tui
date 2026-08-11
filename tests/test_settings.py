@@ -16,3 +16,21 @@ def test_missing_corrupt_and_non_utf8_files_use_defaults(tmp_path: Path) -> None
     settings = AppSettings.load(not_utf8)
     assert settings.project_mode == "short"
     assert settings.sidebar_visible is True
+
+
+def test_known_projects_round_trip(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings = AppSettings.load(settings_path)
+    settings.known_projects = ["/repo/a", "/repo/b"]
+    settings.save()
+
+    reloaded = AppSettings.load(settings_path)
+    assert reloaded.known_projects == ["/repo/a", "/repo/b"]
+
+
+def test_known_projects_filters_non_strings(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        '{"known_projects": ["/ok", 42, ""]}', encoding="utf-8"
+    )
+    assert AppSettings.load(settings_path).known_projects == ["/ok"]

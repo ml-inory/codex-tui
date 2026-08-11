@@ -268,7 +268,7 @@ class Sidebar(Widget):
         yield Static("SESSIONS", classes="section-title")
         yield ListView(id="session-list")
         yield Static(
-            "No projects yet. Start a session to see it here.",
+            "No projects yet — press f4 to add a directory.",
             id="sidebar-hint",
             classes="muted",
         )

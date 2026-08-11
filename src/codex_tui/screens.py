@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -10,6 +13,67 @@ from textual.widgets import Button, Input, ListItem, ListView, Static
 
 from codex_tui.models import ModelEntry
 from codex_tui.sessions import Session
+
+
+class AddProjectScreen(ModalScreen[str | None]):
+    """Prompt for a directory to work in (it may have no sessions yet)."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="add-project-dialog"):
+            yield Static("Add project (directory)", classes="dialog-title")
+            yield Static("", id="add-project-error")
+            yield Input(
+                value=str(Path.cwd()),
+                placeholder="~/repos/my-clone or /absolute/path…",
+                id="add-project-input",
+            )
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Add", id="add-project-ok", variant="primary")
+                yield Button("Cancel", id="add-project-cancel")
+
+    def on_mount(self) -> None:
+        path_input = self.query_one("#add-project-input", Input)
+        path_input.focus()
+        path_input.select_all()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _resolve(self) -> str | None:
+        raw = self.query_one("#add-project-input", Input).value.strip()
+        if not raw:
+            self._show_error("请输入目录路径")
+            return None
+        try:
+            path = Path(os.path.expanduser(raw)).resolve()
+        except (OSError, RuntimeError):
+            self._show_error(f"无法解析路径：{raw}")
+            return None
+        if not path.is_dir():
+            self._show_error(f"不是目录：{path}")
+            return None
+        return str(path)
+
+    def _show_error(self, message: str) -> None:
+        self.query_one("#add-project-error", Static).update(message)
+
+    @on(Input.Submitted, "#add-project-input")
+    def _on_submitted(self, event: Input.Submitted) -> None:
+        path = self._resolve()
+        if path is not None:
+            self.dismiss(path)
+
+    @on(Button.Pressed, "#add-project-ok")
+    def _on_ok(self) -> None:
+        path = self._resolve()
+        if path is not None:
+            self.dismiss(path)
+
+    @on(Button.Pressed, "#add-project-cancel")
+    def _on_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class RenameScreen(ModalScreen[str | None]):
